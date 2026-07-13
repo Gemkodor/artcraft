@@ -13,6 +13,8 @@ pub enum Block {
     Grass,
     Dirt,
     Stone,
+    Sand,
+    Plank,
 }
 
 impl Block {
@@ -31,6 +33,20 @@ impl Block {
             },
             Block::Dirt => 2,
             Block::Stone => 3,
+            Block::Sand => 4,
+            Block::Plank => 5,
+            Block::Air => 0,
+        }
+    }
+
+    /// Tuile utilisée comme icône dans la barre de sélection.
+    pub fn icon_tile(self) -> u32 {
+        match self {
+            Block::Grass => 1,
+            Block::Dirt => 2,
+            Block::Stone => 3,
+            Block::Sand => 4,
+            Block::Plank => 5,
             Block::Air => 0,
         }
     }

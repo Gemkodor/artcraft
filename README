@@ -9,21 +9,25 @@ cargo run
 ```
 
 Contrôles : clic gauche pour capturer la souris, Échap pour la libérer.
-Déplacement : ZQSD (position physique WASD), Espace pour monter, Maj gauche pour descendre.
-Souris capturée : clic gauche pour casser le bloc visé, clic droit pour en poser un.
+Déplacement : ZQSD (position physique WASD), Espace pour sauter.
+Souris capturée : clic gauche pour casser le bloc visé, clic droit pour poser
+le bloc sélectionné (touches 1-5 ou molette pour choisir).
+F bascule entre survie (gravité + collisions) et vol (Espace/Maj pour monter/descendre).
 
 ## Structure
 
 - `src/main.rs` — boucle d'événements winit, gestion clavier/souris
-- `src/state.rs` — initialisation wgpu, pipelines de rendu (terrain + viseur), casser/poser
+- `src/state.rs` — initialisation wgpu, pipelines de rendu (terrain, viseur, hotbar), casser/poser
+- `src/player.rs` — physique du joueur : hitbox AABB, gravité, saut, collisions, mode vol
 - `src/world.rs` — chargement/déchargement des chunks, raycast DDA, modification de blocs
-- `src/chunk.rs` — blocs (herbe/terre/pierre), génération du terrain et des grottes, meshing avec face culling
+- `src/chunk.rs` — blocs (herbe/terre/pierre/sable/planches), génération du terrain et des grottes, meshing avec face culling
 - `src/noise.rs` — bruit de Perlin 2D/3D + fBm, écrit à la main
 - `src/mesh.rs` — format de sommet partagé
-- `src/camera.rs` — caméra FPS (yaw/pitch) et son contrôleur
+- `src/camera.rs` — caméra (yaw/pitch) et état des touches
 - `src/texture.rs` — texture de profondeur + texture atlas procédural
 - `src/shader.wgsl` — vertex/fragment shader (caméra + éclairage directionnel)
 - `src/crosshair.wgsl` — shader du viseur (dessin direct en NDC)
+- `src/ui.wgsl` — shader de la hotbar (quads colorés ou texturés depuis l'atlas)
 
 ## Feuille de route
 
@@ -32,5 +36,6 @@ Souris capturée : clic gauche pour casser le bloc visé, clic droit pour en pos
 - [x] 3. Plusieurs chunks + texture atlas
 - [x] 4. Génération procédurale (bruit de Perlin/Simplex, grottes)
 - [x] 5. Casser/poser des blocs (raycast + re-meshing)
-- [ ] 6. Physique du joueur (AABB, gravité, saut)
+- [x] 6. Physique du joueur (AABB, gravité, saut) + mode survie par défaut, F pour voler
+- [x] 6b. Hotbar : 5 blocs plaçables, sélection touches 1-5 / molette
 - [ ] 7. Éclairage propagé, sauvegarde, greedy meshing, threading, multijoueur

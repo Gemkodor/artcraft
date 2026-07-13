@@ -56,23 +56,22 @@ impl CameraUniform {
     }
 }
 
-/// Contrôleur FPS : les touches sont des positions physiques (WASD sur QWERTY
-/// correspond automatiquement à ZQSD sur AZERTY).
+/// État des touches de déplacement + sensibilité souris. Les touches sont des
+/// positions physiques (WASD sur QWERTY correspond automatiquement à ZQSD sur
+/// AZERTY). Le mouvement lui-même est appliqué par la physique du joueur.
 pub struct CameraController {
-    speed: f32,
     sensitivity: f32,
-    forward: bool,
-    backward: bool,
-    left: bool,
-    right: bool,
-    up: bool,
-    down: bool,
+    pub forward: bool,
+    pub backward: bool,
+    pub left: bool,
+    pub right: bool,
+    pub up: bool,
+    pub down: bool,
 }
 
 impl CameraController {
-    pub fn new(speed: f32, sensitivity: f32) -> Self {
+    pub fn new(sensitivity: f32) -> Self {
         Self {
-            speed,
             sensitivity,
             forward: false,
             backward: false,
@@ -101,35 +100,5 @@ impl CameraController {
         camera.pitch -= dy as f32 * self.sensitivity;
         let limit = 89f32.to_radians();
         camera.pitch = camera.pitch.clamp(-limit, limit);
-    }
-
-    pub fn update(&self, camera: &mut Camera, dt: f32) {
-        // Déplacement horizontal indépendant du pitch, comme dans Minecraft.
-        let forward = Vec3::new(camera.yaw.cos(), 0.0, camera.yaw.sin()).normalize();
-        let right = forward.cross(Vec3::Y);
-
-        let mut dir = Vec3::ZERO;
-        if self.forward {
-            dir += forward;
-        }
-        if self.backward {
-            dir -= forward;
-        }
-        if self.right {
-            dir += right;
-        }
-        if self.left {
-            dir -= right;
-        }
-        if self.up {
-            dir += Vec3::Y;
-        }
-        if self.down {
-            dir -= Vec3::Y;
-        }
-
-        if dir != Vec3::ZERO {
-            camera.position += dir.normalize() * self.speed * dt;
-        }
     }
 }

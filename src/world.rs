@@ -62,6 +62,30 @@ impl World {
         ((cx, cz), local)
     }
 
+    /// Le chunk contenant cette position a-t-il ses données générées ?
+    pub fn is_loaded(&self, pos: Vec3) -> bool {
+        let size = CHUNK_SIZE as i32;
+        let cx = (pos.x.floor() as i32).div_euclid(size);
+        let cz = (pos.z.floor() as i32).div_euclid(size);
+        self.chunks.contains_key(&(cx, cz))
+    }
+
+    /// Plus haut bloc solide de la colonne (x, z), s'il existe.
+    pub fn surface_y(&self, x: i32, z: i32) -> Option<i32> {
+        (0..CHUNK_HEIGHT as i32)
+            .rev()
+            .find(|&y| self.block_at(IVec3::new(x, y, z)).is_solid())
+    }
+
+    #[cfg(test)]
+    pub fn generate_area(&mut self, radius: i32) {
+        for x in -radius..=radius {
+            for z in -radius..=radius {
+                self.chunks.insert((x, z), Chunk::generate(&self.noise, x, z));
+            }
+        }
+    }
+
     /// Bloc en coordonnées monde ; l'extérieur du monde chargé est de l'air.
     pub fn block_at(&self, pos: IVec3) -> Block {
         if pos.y < 0 || pos.y >= CHUNK_HEIGHT as i32 {
@@ -255,13 +279,7 @@ mod tests {
 
     fn test_world() -> World {
         let mut world = World::new();
-        for x in -1..=1 {
-            for z in -1..=1 {
-                world
-                    .chunks
-                    .insert((x, z), Chunk::generate(&world.noise, x, z));
-            }
-        }
+        world.generate_area(1);
         world
     }
 

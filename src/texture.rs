@@ -23,7 +23,7 @@ pub fn create_depth_texture(
 }
 
 /// Nombre de tuiles 16×16 dans l'atlas, côte à côte horizontalement.
-pub const ATLAS_TILES: u32 = 4;
+pub const ATLAS_TILES: u32 = 6;
 
 const TILE: u32 = 16;
 
@@ -47,9 +47,12 @@ fn shade(base: [i32; 3], variation: i32) -> [u8; 3] {
 const GRASS: [i32; 3] = [96, 160, 56];
 const DIRT: [i32; 3] = [134, 96, 67];
 const STONE: [i32; 3] = [125, 125, 125];
+const SAND: [i32; 3] = [220, 205, 160];
+const PLANK: [i32; 3] = [162, 127, 78];
 
 /// Couleur d'un texel de l'atlas. Tuiles : 0 = dessus d'herbe, 1 = côté
-/// d'herbe (terre + bande d'herbe irrégulière en haut), 2 = terre, 3 = pierre.
+/// d'herbe (terre + bande d'herbe irrégulière en haut), 2 = terre,
+/// 3 = pierre, 4 = sable, 5 = planches.
 fn atlas_pixel(tile: u32, x: u32, y: u32) -> [u8; 3] {
     let v = (hash(x, y, tile) % 48) as i32 - 24;
     match tile {
@@ -63,7 +66,19 @@ fn atlas_pixel(tile: u32, x: u32, y: u32) -> [u8; 3] {
             }
         }
         2 => shade(DIRT, v),
-        _ => shade(STONE, v / 2),
+        3 => shade(STONE, v / 2),
+        4 => shade(SAND, v / 3),
+        _ => {
+            // Planches : rainures horizontales toutes les 4 lignes, joints
+            // verticaux décalés d'une planche à l'autre.
+            if y % 4 == 3 {
+                shade(PLANK, -40 + v / 4)
+            } else if (x + (y / 4) * 7) % 16 == 0 {
+                shade(PLANK, -28 + v / 4)
+            } else {
+                shade(PLANK, v / 3)
+            }
+        }
     }
 }
 

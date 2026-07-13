@@ -7,11 +7,93 @@ use winit::window::Window;
 use crate::camera::{Camera, CameraController, CameraUniform};
 use crate::chunk::Block;
 use crate::mesh::Vertex;
-use crate::texture;
+use crate::player::{self, Player};
+use crate::texture::{self, ATLAS_TILES};
 use crate::world::World;
 
 /// Portée de la main du joueur, en blocs.
 const REACH: f32 = 6.0;
+
+/// Les blocs plaçables, dans l'ordre de la barre de sélection (touches 1-5).
+pub const HOTBAR: [Block; 5] = [
+    Block::Grass,
+    Block::Dirt,
+    Block::Stone,
+    Block::Sand,
+    Block::Plank,
+];
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct UiVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    color: [f32; 4],
+}
+
+/// Sommets de la hotbar : par slot, un cadre blanc si sélectionné, un fond
+/// sombre, et l'icône du bloc (tuile de l'atlas). Nombre de sommets constant.
+fn hotbar_vertices(width: u32, height: u32, selected: usize) -> Vec<UiVertex> {
+    let (w, h) = (width as f32, height as f32);
+    let (slot, gap, margin) = (46.0, 5.0, 14.0);
+    let n = HOTBAR.len() as f32;
+    let x0 = (w - (n * slot + (n - 1.0) * gap)) / 2.0;
+
+    let mut verts = Vec::with_capacity(66);
+    let mut quad = |x: f32, y: f32, qw: f32, qh: f32, tile: Option<u32>, color: [f32; 4]| {
+        let (u0, v0, u1, v1) = match tile {
+            Some(t) => {
+                let tw = 1.0 / ATLAS_TILES as f32;
+                let inset = 0.02;
+                (
+                    (t as f32 + inset) * tw,
+                    inset,
+                    (t as f32 + 1.0 - inset) * tw,
+                    1.0 - inset,
+                )
+            }
+            None => (-1.0, -1.0, -1.0, -1.0),
+        };
+        let (xa, ya) = (x / w * 2.0 - 1.0, y / h * 2.0 - 1.0);
+        let (xb, yb) = ((x + qw) / w * 2.0 - 1.0, (y + qh) / h * 2.0 - 1.0);
+        // v0 est le haut de la tuile, donc associé au bord haut du quad (yb).
+        let corners = [
+            ([xa, ya], [u0, v1]),
+            ([xb, ya], [u1, v1]),
+            ([xb, yb], [u1, v0]),
+            ([xa, ya], [u0, v1]),
+            ([xb, yb], [u1, v0]),
+            ([xa, yb], [u0, v0]),
+        ];
+        for (position, uv) in corners {
+            verts.push(UiVertex { position, uv, color });
+        }
+    };
+
+    for (i, block) in HOTBAR.iter().enumerate() {
+        let x = x0 + i as f32 * (slot + gap);
+        if i == selected {
+            quad(
+                x - 3.0,
+                margin - 3.0,
+                slot + 6.0,
+                slot + 6.0,
+                None,
+                [0.95, 0.95, 0.95, 0.9],
+            );
+        }
+        quad(x, margin, slot, slot, None, [0.05, 0.05, 0.05, 0.62]);
+        quad(
+            x + 5.0,
+            margin + 5.0,
+            slot - 10.0,
+            slot - 10.0,
+            Some(block.icon_tile()),
+            [1.0, 1.0, 1.0, 1.0],
+        );
+    }
+    verts
+}
 
 /// Les 12 sommets (2 quads) du viseur, en NDC, pour une fenêtre donnée.
 fn crosshair_vertices(width: u32, height: u32) -> [[f32; 2]; 12] {
@@ -37,7 +119,11 @@ pub struct State {
     pipeline: wgpu::RenderPipeline,
     crosshair_pipeline: wgpu::RenderPipeline,
     crosshair_buffer: wgpu::Buffer,
+    ui_pipeline: wgpu::RenderPipeline,
+    ui_buffer: wgpu::Buffer,
     world: World,
+    player: Player,
+    selected: usize,
     depth_view: wgpu::TextureView,
     texture_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
@@ -133,15 +219,16 @@ impl State {
             ],
         });
 
-        // Caméra : uniform buffer mis à jour à chaque frame. Elle démarre en
-        // hauteur au-dessus du terrain (~50 max), tournée vers l'horizon.
+        // Le joueur apparaît au-dessus du terrain ; la physique le pose au
+        // sol dès que le chunk est généré. La caméra suit ses yeux.
+        let player = Player::new(Vec3::new(8.5, 90.0, 8.5));
         let camera = Camera::new(
-            Vec3::new(8.0, 62.0, 8.0),
+            player.pos + Vec3::Y * player::EYE_HEIGHT,
             45f32.to_radians(),
-            -20f32.to_radians(),
+            -10f32.to_radians(),
             config.width as f32 / config.height as f32,
         );
-        let controller = CameraController::new(12.0, 0.002);
+        let controller = CameraController::new(0.002);
 
         let camera_uniform = CameraUniform::from_camera(&camera);
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -264,6 +351,55 @@ impl State {
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
+        // Pipeline UI (hotbar) : quads en NDC, alpha blending, échantillonne
+        // l'atlas de blocs pour les icônes.
+        let ui_shader = device.create_shader_module(wgpu::include_wgsl!("ui.wgsl"));
+        let ui_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ui_layout"),
+            bind_group_layouts: &[&texture_layout],
+            push_constant_ranges: &[],
+        });
+        let ui_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ui_pipeline"),
+            layout: Some(&ui_layout),
+            vertex: wgpu::VertexState {
+                module: &ui_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<UiVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Float32x4],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &ui_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let ui_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ui_buffer"),
+            contents: bytemuck::cast_slice(&hotbar_vertices(config.width, config.height, 0)),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
         Self {
             surface,
             device,
@@ -272,7 +408,11 @@ impl State {
             pipeline,
             crosshair_pipeline,
             crosshair_buffer,
+            ui_pipeline,
+            ui_buffer,
             world: World::new(),
+            player,
+            selected: 0,
             depth_view,
             texture_bind_group,
             camera_buffer,
@@ -308,28 +448,55 @@ impl State {
         }
     }
 
-    /// Clic droit : pose un bloc de terre sur la face visée.
+    /// Clic droit : pose le bloc sélectionné sur la face visée.
     pub fn place_block(&mut self) {
         let hit = self
             .world
             .raycast(self.camera.position, self.camera.forward(), REACH);
         if let Some(hit) = hit {
             let target = hit.block + hit.normal;
-            // Ne pas poser un bloc dans la tête de la caméra (la vraie
-            // hitbox du joueur arrive avec la physique, jalon 6).
-            let eye = self.camera.position.floor().as_ivec3();
-            if self.world.block_at(target) == Block::Air && target != eye {
-                self.world.set_block(target, Block::Dirt);
+            // Jamais dans la hitbox du joueur.
+            if self.world.block_at(target) == Block::Air && !self.player.intersects_block(target)
+            {
+                self.world.set_block(target, HOTBAR[self.selected]);
             }
         }
     }
 
+    /// Touches 1-5.
+    pub fn select_slot(&mut self, slot: usize) {
+        if slot < HOTBAR.len() {
+            self.selected = slot;
+        }
+    }
+
+    /// Molette : +1 vers le bas, -1 vers le haut.
+    pub fn scroll_slot(&mut self, dir: i32) {
+        let n = HOTBAR.len() as i32;
+        self.selected = ((self.selected as i32 + dir).rem_euclid(n)) as usize;
+    }
+
+    pub fn toggle_fly(&mut self) {
+        self.player.toggle_fly();
+    }
+
     pub fn update(&mut self, dt: f32) {
-        self.controller.update(&mut self.camera, dt);
+        self.player
+            .update(&self.world, &self.controller, self.camera.yaw, dt);
+        self.camera.position = self.player.pos + Vec3::Y * player::EYE_HEIGHT;
         self.world.update(&self.device, self.camera.position);
         let uniform = CameraUniform::from_camera(&self.camera);
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        self.queue.write_buffer(
+            &self.ui_buffer,
+            0,
+            bytemuck::cast_slice(&hotbar_vertices(
+                self.config.width,
+                self.config.height,
+                self.selected,
+            )),
+        );
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -382,6 +549,11 @@ impl State {
             pass.set_pipeline(&self.crosshair_pipeline);
             pass.set_vertex_buffer(0, self.crosshair_buffer.slice(..));
             pass.draw(0..12, 0..1);
+
+            pass.set_pipeline(&self.ui_pipeline);
+            pass.set_bind_group(0, &self.texture_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.ui_buffer.slice(..));
+            pass.draw(0..66, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

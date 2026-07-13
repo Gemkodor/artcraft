@@ -2,6 +2,7 @@ mod camera;
 mod chunk;
 mod mesh;
 mod noise;
+mod player;
 mod state;
 mod texture;
 mod world;
@@ -10,7 +11,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{
+    DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent,
+};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{CursorGrabMode, Window, WindowId};
@@ -53,10 +56,9 @@ impl ApplicationHandler for App {
         }
         let window = Arc::new(
             event_loop
-                .create_window(
-                    Window::default_attributes()
-                        .with_title("Artcraft — clic pour capturer la souris, Échap pour libérer"),
-                )
+                .create_window(Window::default_attributes().with_title(
+                    "Artcraft — clic : souris/casser · droit : poser · 1-5/molette : bloc · F : vol · Échap : libérer",
+                ))
                 .expect("échec de création de la fenêtre"),
         );
         self.state = Some(pollster::block_on(State::new(window.clone())));
@@ -72,12 +74,31 @@ impl ApplicationHandler for App {
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    if code == KeyCode::Escape && event.state == ElementState::Pressed {
-                        self.set_mouse_grab(false);
-                    } else {
-                        state
-                            .controller
-                            .process_key(code, event.state == ElementState::Pressed);
+                    let pressed = event.state == ElementState::Pressed;
+                    match code {
+                        KeyCode::Escape if pressed => self.set_mouse_grab(false),
+                        KeyCode::KeyF if pressed => state.toggle_fly(),
+                        KeyCode::Digit1 if pressed => state.select_slot(0),
+                        KeyCode::Digit2 if pressed => state.select_slot(1),
+                        KeyCode::Digit3 if pressed => state.select_slot(2),
+                        KeyCode::Digit4 if pressed => state.select_slot(3),
+                        KeyCode::Digit5 if pressed => state.select_slot(4),
+                        _ => {
+                            state.controller.process_key(code, pressed);
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                if self.mouse_grabbed {
+                    let y = match delta {
+                        MouseScrollDelta::LineDelta(_, y) => y,
+                        MouseScrollDelta::PixelDelta(pos) => pos.y as f32,
+                    };
+                    if y < 0.0 {
+                        state.scroll_slot(1);
+                    } else if y > 0.0 {
+                        state.scroll_slot(-1);
                     }
                 }
             }
