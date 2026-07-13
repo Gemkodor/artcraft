@@ -222,7 +222,11 @@ mod tests {
         // Les pieds reposent sur un bloc solide, et la tête n'est pas dans
         // un bloc.
         let feet = player.pos;
-        let below = IVec3::new(feet.x.floor() as i32, (feet.y - 0.5).floor() as i32, feet.z.floor() as i32);
+        let below = IVec3::new(
+            feet.x.floor() as i32,
+            (feet.y - 0.5).floor() as i32,
+            feet.z.floor() as i32,
+        );
         assert!(world.block_at(below).is_solid());
         assert!(!world.block_at(feet.floor().as_ivec3()).is_solid());
     }

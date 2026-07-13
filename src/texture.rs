@@ -1,10 +1,6 @@
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-pub fn create_depth_texture(
-    device: &wgpu::Device,
-    width: u32,
-    height: u32,
-) -> wgpu::TextureView {
+pub fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::TextureView {
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("depth_texture"),
         size: wgpu::Extent3d {

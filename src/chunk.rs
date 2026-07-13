@@ -92,12 +92,7 @@ fn terrain_height(noise: &Noise, wx: i32, wz: i32) -> usize {
 /// Grottes en "gruyère" : on creuse là où un fBm de Perlin 3D dépasse un
 /// seuil. Plus le seuil est bas, plus les grottes sont vastes.
 fn is_cave(noise: &Noise, wx: i32, wy: i32, wz: i32) -> bool {
-    let n = noise.fbm3(
-        wx as f32 * 0.055,
-        wy as f32 * 0.055,
-        wz as f32 * 0.055,
-        3,
-    );
+    let n = noise.fbm3(wx as f32 * 0.055, wy as f32 * 0.055, wz as f32 * 0.055, 3);
     n > 0.38
 }
 

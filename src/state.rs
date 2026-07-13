@@ -8,108 +8,12 @@ use crate::camera::{Camera, CameraController, CameraUniform};
 use crate::chunk::Block;
 use crate::mesh::Vertex;
 use crate::player::{self, Player};
-use crate::texture::{self, ATLAS_TILES};
+use crate::texture;
+use crate::ui::{self, HOTBAR, UiVertex};
 use crate::world::World;
 
 /// Portée de la main du joueur, en blocs.
 const REACH: f32 = 6.0;
-
-/// Les blocs plaçables, dans l'ordre de la barre de sélection (touches 1-5).
-pub const HOTBAR: [Block; 5] = [
-    Block::Grass,
-    Block::Dirt,
-    Block::Stone,
-    Block::Sand,
-    Block::Plank,
-];
-
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-struct UiVertex {
-    position: [f32; 2],
-    uv: [f32; 2],
-    color: [f32; 4],
-}
-
-/// Sommets de la hotbar : par slot, un cadre blanc si sélectionné, un fond
-/// sombre, et l'icône du bloc (tuile de l'atlas). Nombre de sommets constant.
-fn hotbar_vertices(width: u32, height: u32, selected: usize) -> Vec<UiVertex> {
-    let (w, h) = (width as f32, height as f32);
-    let (slot, gap, margin) = (46.0, 5.0, 14.0);
-    let n = HOTBAR.len() as f32;
-    let x0 = (w - (n * slot + (n - 1.0) * gap)) / 2.0;
-
-    let mut verts = Vec::with_capacity(66);
-    let mut quad = |x: f32, y: f32, qw: f32, qh: f32, tile: Option<u32>, color: [f32; 4]| {
-        let (u0, v0, u1, v1) = match tile {
-            Some(t) => {
-                let tw = 1.0 / ATLAS_TILES as f32;
-                let inset = 0.02;
-                (
-                    (t as f32 + inset) * tw,
-                    inset,
-                    (t as f32 + 1.0 - inset) * tw,
-                    1.0 - inset,
-                )
-            }
-            None => (-1.0, -1.0, -1.0, -1.0),
-        };
-        let (xa, ya) = (x / w * 2.0 - 1.0, y / h * 2.0 - 1.0);
-        let (xb, yb) = ((x + qw) / w * 2.0 - 1.0, (y + qh) / h * 2.0 - 1.0);
-        // v0 est le haut de la tuile, donc associé au bord haut du quad (yb).
-        let corners = [
-            ([xa, ya], [u0, v1]),
-            ([xb, ya], [u1, v1]),
-            ([xb, yb], [u1, v0]),
-            ([xa, ya], [u0, v1]),
-            ([xb, yb], [u1, v0]),
-            ([xa, yb], [u0, v0]),
-        ];
-        for (position, uv) in corners {
-            verts.push(UiVertex { position, uv, color });
-        }
-    };
-
-    for (i, block) in HOTBAR.iter().enumerate() {
-        let x = x0 + i as f32 * (slot + gap);
-        if i == selected {
-            quad(
-                x - 3.0,
-                margin - 3.0,
-                slot + 6.0,
-                slot + 6.0,
-                None,
-                [0.95, 0.95, 0.95, 0.9],
-            );
-        }
-        quad(x, margin, slot, slot, None, [0.05, 0.05, 0.05, 0.62]);
-        quad(
-            x + 5.0,
-            margin + 5.0,
-            slot - 10.0,
-            slot - 10.0,
-            Some(block.icon_tile()),
-            [1.0, 1.0, 1.0, 1.0],
-        );
-    }
-    verts
-}
-
-/// Les 12 sommets (2 quads) du viseur, en NDC, pour une fenêtre donnée.
-fn crosshair_vertices(width: u32, height: u32) -> [[f32; 2]; 12] {
-    // Demi-longueur et demi-épaisseur des branches, en pixels.
-    let (len, thick) = (9.0, 1.5);
-    let (lx, tx) = (len / width as f32 * 2.0, thick / width as f32 * 2.0);
-    let (ly, ty) = (len / height as f32 * 2.0, thick / height as f32 * 2.0);
-    [
-        // Branche horizontale.
-        [-lx, -ty], [lx, -ty], [lx, ty],
-        [-lx, -ty], [lx, ty], [-lx, ty],
-        // Branche verticale.
-        [-tx, -ly], [tx, -ly], [tx, ly],
-        [-tx, -ly], [tx, ly], [-tx, ly],
-    ]
-}
 
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -347,7 +251,7 @@ impl State {
         });
         let crosshair_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("crosshair_buffer"),
-            contents: bytemuck::cast_slice(&crosshair_vertices(config.width, config.height)),
+            contents: bytemuck::cast_slice(&ui::crosshair_vertices(config.width, config.height)),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -396,7 +300,7 @@ impl State {
         });
         let ui_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ui_buffer"),
-            contents: bytemuck::cast_slice(&hotbar_vertices(config.width, config.height, 0)),
+            contents: bytemuck::cast_slice(&ui::hotbar_vertices(config.width, config.height, 0)),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -434,7 +338,7 @@ impl State {
         self.queue.write_buffer(
             &self.crosshair_buffer,
             0,
-            bytemuck::cast_slice(&crosshair_vertices(width, height)),
+            bytemuck::cast_slice(&ui::crosshair_vertices(width, height)),
         );
     }
 
@@ -456,8 +360,7 @@ impl State {
         if let Some(hit) = hit {
             let target = hit.block + hit.normal;
             // Jamais dans la hitbox du joueur.
-            if self.world.block_at(target) == Block::Air && !self.player.intersects_block(target)
-            {
+            if self.world.block_at(target) == Block::Air && !self.player.intersects_block(target) {
                 self.world.set_block(target, HOTBAR[self.selected]);
             }
         }
@@ -491,7 +394,7 @@ impl State {
         self.queue.write_buffer(
             &self.ui_buffer,
             0,
-            bytemuck::cast_slice(&hotbar_vertices(
+            bytemuck::cast_slice(&ui::hotbar_vertices(
                 self.config.width,
                 self.config.height,
                 self.selected,
@@ -553,7 +456,7 @@ impl State {
             pass.set_pipeline(&self.ui_pipeline);
             pass.set_bind_group(0, &self.texture_bind_group, &[]);
             pass.set_vertex_buffer(0, self.ui_buffer.slice(..));
-            pass.draw(0..66, 0..1);
+            pass.draw(0..ui::HOTBAR_VERTEX_COUNT, 0..1);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

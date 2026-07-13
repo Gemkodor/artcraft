@@ -5,6 +5,7 @@ mod noise;
 mod player;
 mod state;
 mod texture;
+mod ui;
 mod world;
 
 use std::sync::Arc;
@@ -139,7 +140,8 @@ impl ApplicationHandler for App {
         if !self.mouse_grabbed {
             return;
         }
-        if let (Some(state), DeviceEvent::MouseMotion { delta: (dx, dy) }) = (&mut self.state, event)
+        if let (Some(state), DeviceEvent::MouseMotion { delta: (dx, dy) }) =
+            (&mut self.state, event)
         {
             state.controller.process_mouse(&mut state.camera, dx, dy);
         }

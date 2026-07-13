@@ -81,7 +81,8 @@ impl World {
     pub fn generate_area(&mut self, radius: i32) {
         for x in -radius..=radius {
             for z in -radius..=radius {
-                self.chunks.insert((x, z), Chunk::generate(&self.noise, x, z));
+                self.chunks
+                    .insert((x, z), Chunk::generate(&self.noise, x, z));
             }
         }
     }
@@ -222,7 +223,8 @@ impl World {
         }
         missing.sort_by_key(|&(x, z)| (x - ccx).pow(2) + (z - ccz).pow(2));
         for &(x, z) in missing.iter().take(GEN_BUDGET) {
-            self.chunks.insert((x, z), Chunk::generate(&self.noise, x, z));
+            self.chunks
+                .insert((x, z), Chunk::generate(&self.noise, x, z));
         }
 
         // Meshing des chunks dont les données et les 4 voisins sont prêts.
