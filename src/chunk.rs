@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::mesh::Vertex;
 use crate::noise::Noise;
@@ -55,6 +55,9 @@ impl Block {
 /// Un chunk : colonne de 16×256×16 blocs stockée à plat.
 /// On ne dessine jamais "des cubes" : la grille est transformée en un seul
 /// mesh ne contenant que les faces exposées à l'air.
+/// `Clone` sert au copy-on-write d'`Arc::make_mut` quand on modifie un bloc
+/// pendant qu'un thread de meshing lit encore l'ancienne version.
+#[derive(Clone)]
 pub struct Chunk {
     blocks: Vec<Block>,
 }
@@ -132,22 +135,26 @@ impl Chunk {
     }
 }
 
+/// Les 4 chunks voisins d'un chunk à mesher. Des `Arc` (pointeurs partagés,
+/// comptés par référence) : le meshing tourne dans des threads de travail et
+/// a besoin de lire ces données sans les copier ni les verrouiller.
+pub struct ChunkNeighbors {
+    pub east: Arc<Chunk>,  // +X
+    pub west: Arc<Chunk>,  // -X
+    pub south: Arc<Chunk>, // +Z
+    pub north: Arc<Chunk>, // -Z
+}
+
 /// Construit le mesh du chunk (cx, cz) en coordonnées monde. Une face n'est
 /// émise que si le bloc voisin est de l'air — y compris à travers les
-/// frontières de chunks, d'où le besoin des 4 voisins. L'appelant garantit
-/// qu'ils sont présents dans la map ; un voisin absent serait traité comme
-/// plein (faces cachées, pas de murs fantômes).
+/// frontières de chunks, d'où le besoin des 4 voisins.
 pub fn build_mesh(
-    chunks: &HashMap<(i32, i32), Chunk>,
+    chunk: &Chunk,
+    neighbors: &ChunkNeighbors,
     cx: i32,
     cz: i32,
 ) -> (Vec<Vertex>, Vec<u32>) {
     let size = CHUNK_SIZE as i32;
-    let chunk = &chunks[&(cx, cz)];
-    let east = chunks.get(&(cx + 1, cz));
-    let west = chunks.get(&(cx - 1, cz));
-    let south = chunks.get(&(cx, cz + 1));
-    let north = chunks.get(&(cx, cz - 1));
 
     // Voisin d'un bloc en coordonnées locales, éventuellement à ±1 hors du
     // chunk sur un seul axe.
@@ -157,14 +164,10 @@ pub fn build_mesh(
         }
         let y = y as usize;
         match (x, z) {
-            (-1, _) => west.map_or(Block::Stone, |c| {
-                c.block_local(CHUNK_SIZE - 1, y, z as usize)
-            }),
-            (x, _) if x == size => east.map_or(Block::Stone, |c| c.block_local(0, y, z as usize)),
-            (_, -1) => north.map_or(Block::Stone, |c| {
-                c.block_local(x as usize, y, CHUNK_SIZE - 1)
-            }),
-            (_, z) if z == size => south.map_or(Block::Stone, |c| c.block_local(x as usize, y, 0)),
+            (-1, _) => neighbors.west.block_local(CHUNK_SIZE - 1, y, z as usize),
+            (x, _) if x == size => neighbors.east.block_local(0, y, z as usize),
+            (_, -1) => neighbors.north.block_local(x as usize, y, CHUNK_SIZE - 1),
+            (_, z) if z == size => neighbors.south.block_local(x as usize, y, 0),
             _ => chunk.block_local(x as usize, y, z as usize),
         }
     };

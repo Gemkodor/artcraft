@@ -6,6 +6,7 @@ mod player;
 mod state;
 mod texture;
 mod ui;
+mod worker;
 mod world;
 
 use std::sync::Arc;

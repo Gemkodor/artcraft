@@ -1,17 +1,23 @@
+//! Le monde : cycle de vie des chunks (génération, meshing, déchargement),
+//! accès aux blocs en coordonnées monde, raycast et modification de blocs.
+//!
+//! La génération et le meshing tournent dans un pool de threads (`worker`).
+//! Le thread principal se contente d'envoyer des jobs, d'appliquer les
+//! résultats prêts et d'uploader les buffers GPU — des opérations courtes,
+//! donc pas de micro-saccades pendant l'exploration.
+
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use glam::{IVec3, Vec3};
 use wgpu::util::DeviceExt;
 
-use crate::chunk::{self, Block, CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
+use crate::chunk::{self, Block, CHUNK_HEIGHT, CHUNK_SIZE, Chunk, ChunkNeighbors};
 use crate::noise::Noise;
+use crate::worker::{Job, JobResult, WorkerPool};
 
 /// Rayon en chunks autour de la caméra dans lequel on affiche le terrain.
 pub const RENDER_DISTANCE: i32 = 6;
-/// Chunks générés (données) par frame au maximum, pour lisser la charge.
-const GEN_BUDGET: usize = 8;
-/// Meshes construits par frame au maximum — c'est l'opération coûteuse.
-const MESH_BUDGET: usize = 2;
 
 pub struct ChunkMesh {
     pub vertex_buffer: wgpu::Buffer,
@@ -31,19 +37,38 @@ pub struct RayHit {
 /// consulter ses 4 voisins.
 pub struct World {
     noise: Noise,
-    chunks: HashMap<(i32, i32), Chunk>,
+    /// Données de blocs. `Arc` pour pouvoir les prêter aux threads de
+    /// meshing sans copie ; `Arc::make_mut` fait un copy-on-write à la
+    /// modification si un thread lit encore l'ancienne version.
+    chunks: HashMap<(i32, i32), Arc<Chunk>>,
     meshes: HashMap<(i32, i32), ChunkMesh>,
-    /// Chunks dont le mesh doit être reconstruit (bloc modifié).
-    dirty: HashSet<(i32, i32)>,
+    /// Version incrémentée à chaque modification de bloc d'un chunk : un
+    /// mesh calculé pour une version plus ancienne est jeté à l'arrivée.
+    versions: HashMap<(i32, i32), u64>,
+    /// Chunks à re-mesher immédiatement (bloc modifié : le joueur doit voir
+    /// le changement à la frame suivante).
+    dirty_now: HashSet<(i32, i32)>,
+    /// Chunks à re-mesher dès que possible mais sans bloquer la frame
+    /// (voisins d'un bloc modifié).
+    dirty_async: HashSet<(i32, i32)>,
+    pending_gen: HashSet<(i32, i32)>,
+    pending_mesh: HashSet<(i32, i32)>,
+    workers: WorkerPool,
 }
 
 impl World {
     pub fn new() -> Self {
+        let noise = Noise::new(1337);
         Self {
-            noise: Noise::new(1337),
+            noise,
             chunks: HashMap::new(),
             meshes: HashMap::new(),
-            dirty: HashSet::new(),
+            versions: HashMap::new(),
+            dirty_now: HashSet::new(),
+            dirty_async: HashSet::new(),
+            pending_gen: HashSet::new(),
+            pending_mesh: HashSet::new(),
+            workers: WorkerPool::new(noise),
         }
     }
 
@@ -82,7 +107,7 @@ impl World {
         for x in -radius..=radius {
             for z in -radius..=radius {
                 self.chunks
-                    .insert((x, z), Chunk::generate(&self.noise, x, z));
+                    .insert((x, z), Arc::new(Chunk::generate(&self.noise, x, z)));
             }
         }
     }
@@ -98,8 +123,9 @@ impl World {
             .map_or(Block::Air, |c| c.block_local(lx, ly, lz))
     }
 
-    /// Modifie un bloc et marque le chunk (et les voisins si le bloc est en
-    /// bordure) pour re-meshing au prochain update.
+    /// Modifie un bloc. Le chunk touché sera re-meshé immédiatement, ses
+    /// 4 voisins de manière asynchrone (l'éclairage et les faces de bordure
+    /// peuvent déborder sur eux).
     pub fn set_block(&mut self, pos: IVec3, block: Block) {
         if pos.y < 0 || pos.y >= CHUNK_HEIGHT as i32 {
             return;
@@ -108,21 +134,32 @@ impl World {
         let Some(chunk) = self.chunks.get_mut(&coord) else {
             return;
         };
-        chunk.set_local(lx, ly, lz, block);
+        Arc::make_mut(chunk).set_local(lx, ly, lz, block);
+        *self.versions.entry(coord).or_insert(0) += 1;
 
-        self.dirty.insert(coord);
-        if lx == 0 {
-            self.dirty.insert((coord.0 - 1, coord.1));
+        self.dirty_now.insert(coord);
+        for neighbor in [
+            (coord.0 + 1, coord.1),
+            (coord.0 - 1, coord.1),
+            (coord.0, coord.1 + 1),
+            (coord.0, coord.1 - 1),
+        ] {
+            self.dirty_async.insert(neighbor);
         }
-        if lx == CHUNK_SIZE - 1 {
-            self.dirty.insert((coord.0 + 1, coord.1));
-        }
-        if lz == 0 {
-            self.dirty.insert((coord.0, coord.1 - 1));
-        }
-        if lz == CHUNK_SIZE - 1 {
-            self.dirty.insert((coord.0, coord.1 + 1));
-        }
+    }
+
+    fn version(&self, coord: (i32, i32)) -> u64 {
+        self.versions.get(&coord).copied().unwrap_or(0)
+    }
+
+    /// Les 4 voisins d'un chunk, si tous sont générés.
+    fn neighbors_of(&self, coord: (i32, i32)) -> Option<ChunkNeighbors> {
+        Some(ChunkNeighbors {
+            east: Arc::clone(self.chunks.get(&(coord.0 + 1, coord.1))?),
+            west: Arc::clone(self.chunks.get(&(coord.0 - 1, coord.1))?),
+            south: Arc::clone(self.chunks.get(&(coord.0, coord.1 + 1))?),
+            north: Arc::clone(self.chunks.get(&(coord.0, coord.1 - 1))?),
+        })
     }
 
     /// Parcours voxel par voxel du rayon (algorithme DDA d'Amanatides & Woo) :
@@ -186,70 +223,133 @@ impl World {
         }
     }
 
-    /// Charge/décharge les chunks en fonction de la position de la caméra.
-    /// Appelé à chaque frame ; les budgets étalent le travail pour éviter
-    /// les à-coups.
+    /// Fait vivre le monde autour de la caméra. Appelé à chaque frame ; tout
+    /// le travail lourd part dans les workers, seuls les uploads GPU et les
+    /// re-mesh urgents (bloc modifié) restent ici.
     pub fn update(&mut self, device: &wgpu::Device, camera_pos: Vec3) {
         let ccx = (camera_pos.x.floor() as i32).div_euclid(CHUNK_SIZE as i32);
         let ccz = (camera_pos.z.floor() as i32).div_euclid(CHUNK_SIZE as i32);
         let data_radius = RENDER_DISTANCE + 1;
 
-        // Re-meshing immédiat des chunks modifiés (hors budget : il faut que
-        // casser un bloc soit visible à la frame suivante, sans flicker).
-        let dirty: Vec<(i32, i32)> = self.dirty.drain().collect();
-        for coord in dirty {
-            if self.meshes.contains_key(&coord) {
-                self.upload_mesh(device, coord);
+        // 1. Appliquer les résultats des workers.
+        for result in self.workers.drain_results() {
+            match result {
+                JobResult::Generated { coord, chunk } => {
+                    self.pending_gen.remove(&coord);
+                    let in_range = (coord.0 - ccx).abs() <= data_radius + 1
+                        && (coord.1 - ccz).abs() <= data_radius + 1;
+                    if in_range {
+                        self.chunks.insert(coord, Arc::new(chunk));
+                    }
+                }
+                JobResult::Meshed {
+                    coord,
+                    version,
+                    vertices,
+                    indices,
+                } => {
+                    self.pending_mesh.remove(&coord);
+                    let in_range = (coord.0 - ccx).abs() <= RENDER_DISTANCE
+                        && (coord.1 - ccz).abs() <= RENDER_DISTANCE;
+                    // Un résultat calculé avant une modification de bloc est
+                    // périmé : un job plus récent (ou un re-mesh immédiat)
+                    // fournit ou a déjà fourni la bonne version.
+                    if in_range && version == self.version(coord) {
+                        self.store_mesh(device, coord, vertices, indices);
+                    }
+                }
             }
         }
 
-        // Déchargement (avec une marge d'hystérésis pour ne pas re-générer
-        // en boucle à la frontière).
+        // 2. Re-mesh immédiat des chunks modifiés ce frame (un seul par clic
+        // en pratique : le coût reste imperceptible).
+        let dirty: Vec<(i32, i32)> = self.dirty_now.drain().collect();
+        for coord in dirty {
+            if !self.meshes.contains_key(&coord) {
+                continue;
+            }
+            if let (Some(chunk), Some(neighbors)) =
+                (self.chunks.get(&coord), self.neighbors_of(coord))
+            {
+                let (vertices, indices) = chunk::build_mesh(chunk, &neighbors, coord.0, coord.1);
+                self.store_mesh(device, coord, vertices, indices);
+            }
+        }
+
+        // 3. Re-mesh asynchrone des voisins de blocs modifiés.
+        let dirty: Vec<(i32, i32)> = self.dirty_async.drain().collect();
+        for coord in dirty {
+            if self.meshes.contains_key(&coord) {
+                self.submit_mesh_job(coord);
+            }
+        }
+
+        // 4. Déchargement (marge d'hystérésis pour ne pas re-générer en
+        // boucle à la frontière).
         self.chunks.retain(|&(x, z), _| {
             (x - ccx).abs() <= data_radius + 1 && (z - ccz).abs() <= data_radius + 1
         });
         self.meshes.retain(|&(x, z), _| {
             (x - ccx).abs() <= RENDER_DISTANCE && (z - ccz).abs() <= RENDER_DISTANCE
         });
+        let chunks = &self.chunks;
+        self.versions.retain(|coord, _| chunks.contains_key(coord));
 
-        // Génération des données manquantes, la plus proche d'abord.
+        // 5. Demander la génération des données manquantes, la plus proche
+        // d'abord (l'ordre d'envoi est l'ordre de traitement des workers).
         let mut missing: Vec<(i32, i32)> = Vec::new();
         for x in (ccx - data_radius)..=(ccx + data_radius) {
             for z in (ccz - data_radius)..=(ccz + data_radius) {
-                if !self.chunks.contains_key(&(x, z)) {
-                    missing.push((x, z));
+                let coord = (x, z);
+                if !self.chunks.contains_key(&coord) && !self.pending_gen.contains(&coord) {
+                    missing.push(coord);
                 }
             }
         }
         missing.sort_by_key(|&(x, z)| (x - ccx).pow(2) + (z - ccz).pow(2));
-        for &(x, z) in missing.iter().take(GEN_BUDGET) {
-            self.chunks
-                .insert((x, z), Chunk::generate(&self.noise, x, z));
+        for coord in missing {
+            self.pending_gen.insert(coord);
+            self.workers.submit(Job::Generate { coord });
         }
 
-        // Meshing des chunks dont les données et les 4 voisins sont prêts.
+        // 6. Demander le meshing des chunks prêts (données + 4 voisins).
         let mut to_mesh: Vec<(i32, i32)> = Vec::new();
         for x in (ccx - RENDER_DISTANCE)..=(ccx + RENDER_DISTANCE) {
             for z in (ccz - RENDER_DISTANCE)..=(ccz + RENDER_DISTANCE) {
-                let ready = !self.meshes.contains_key(&(x, z))
-                    && self.chunks.contains_key(&(x, z))
-                    && self.chunks.contains_key(&(x + 1, z))
-                    && self.chunks.contains_key(&(x - 1, z))
-                    && self.chunks.contains_key(&(x, z + 1))
-                    && self.chunks.contains_key(&(x, z - 1));
-                if ready {
-                    to_mesh.push((x, z));
+                let coord = (x, z);
+                if !self.meshes.contains_key(&coord) && !self.pending_mesh.contains(&coord) {
+                    to_mesh.push(coord);
                 }
             }
         }
         to_mesh.sort_by_key(|&(x, z)| (x - ccx).pow(2) + (z - ccz).pow(2));
-        for &coord in to_mesh.iter().take(MESH_BUDGET) {
-            self.upload_mesh(device, coord);
+        for coord in to_mesh {
+            self.submit_mesh_job(coord);
         }
     }
 
-    fn upload_mesh(&mut self, device: &wgpu::Device, coord: (i32, i32)) {
-        let (vertices, indices) = chunk::build_mesh(&self.chunks, coord.0, coord.1);
+    fn submit_mesh_job(&mut self, coord: (i32, i32)) {
+        let (Some(center), Some(neighbors)) = (self.chunks.get(&coord), self.neighbors_of(coord))
+        else {
+            return;
+        };
+        self.pending_mesh.insert(coord);
+        self.workers.submit(Job::Mesh {
+            coord,
+            version: self.versions.get(&coord).copied().unwrap_or(0),
+            center: Arc::clone(center),
+            neighbors,
+        });
+    }
+
+    /// Upload d'un mesh vers le GPU — rapide, reste sur le thread principal.
+    fn store_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        coord: (i32, i32),
+        vertices: Vec<crate::mesh::Vertex>,
+        indices: Vec<u32>,
+    ) {
         if indices.is_empty() {
             self.meshes.remove(&coord);
             return;
@@ -304,7 +404,8 @@ mod tests {
             .unwrap();
         world.set_block(hit.block, Block::Air);
         assert_eq!(world.block_at(hit.block), Block::Air);
-        assert!(world.dirty.contains(&(0, 0)));
+        assert!(world.dirty_now.contains(&(0, 0)));
+        assert_eq!(world.version((0, 0)), 1);
     }
 
     #[test]
