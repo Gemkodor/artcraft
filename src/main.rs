@@ -1,5 +1,6 @@
 mod camera;
 mod chunk;
+mod light;
 mod mesh;
 mod noise;
 mod player;
@@ -85,6 +86,7 @@ impl ApplicationHandler for App {
                         KeyCode::Digit3 if pressed => state.select_slot(2),
                         KeyCode::Digit4 if pressed => state.select_slot(3),
                         KeyCode::Digit5 if pressed => state.select_slot(4),
+                        KeyCode::Digit6 if pressed => state.select_slot(5),
                         _ => {
                             state.controller.process_key(code, pressed);
                         }

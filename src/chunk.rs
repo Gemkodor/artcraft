@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::light;
 use crate::mesh::Vertex;
 use crate::noise::Noise;
 use crate::texture::ATLAS_TILES;
@@ -15,6 +16,8 @@ pub enum Block {
     Stone,
     Sand,
     Plank,
+    /// Bloc lumineux : source de lumière propagée (niveau 15).
+    Glow,
 }
 
 impl Block {
@@ -35,6 +38,7 @@ impl Block {
             Block::Stone => 3,
             Block::Sand => 4,
             Block::Plank => 5,
+            Block::Glow => 6,
             Block::Air => 0,
         }
     }
@@ -47,7 +51,16 @@ impl Block {
             Block::Stone => 3,
             Block::Sand => 4,
             Block::Plank => 5,
+            Block::Glow => 6,
             Block::Air => 0,
+        }
+    }
+
+    /// Niveau de lumière émis par le bloc (0 à 15).
+    pub fn emission(self) -> u8 {
+        match self {
+            Block::Glow => 15,
+            _ => 0,
         }
     }
 }
@@ -172,6 +185,13 @@ pub fn build_mesh(
         }
     };
 
+    // La lumière propagée (ciel + émission) sur toute la région ; l'occlusion
+    // ambiante et la lumière par sommet sont dérivées de cette grille.
+    let light = light::compute(chunk, neighbors);
+
+    // Facteur d'assombrissement par niveau d'occlusion (0 = coin bouché).
+    const AO_CURVE: [f32; 4] = [0.35, 0.62, 0.82, 1.0];
+
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let tile_width = 1.0 / ATLAS_TILES as f32;
@@ -188,13 +208,73 @@ pub fn build_mesh(
                     continue;
                 }
                 for (face, (normal, corners)) in FACES.iter().enumerate() {
-                    let (nx, ny, nz) = (normal[0] as i32, normal[1] as i32, normal[2] as i32);
-                    if block_at(x + nx, y + ny, z + nz).is_solid() {
+                    let n = [normal[0] as i32, normal[1] as i32, normal[2] as i32];
+                    if block_at(x + n[0], y + n[1], z + n[2]).is_solid() {
                         continue;
                     }
+                    // La cellule d'air devant la face : c'est elle qui est
+                    // éclairée, pas le bloc lui-même.
+                    let f = [x + n[0], y + n[1], z + n[2]];
+
                     let tile = block.tile(face) as f32;
                     let base = vertices.len() as u32;
-                    for (corner, uv) in corners.iter().zip(FACE_UVS) {
+                    let mut corner_ao = [0u8; 4];
+
+                    for (ci, (corner, uv)) in corners.iter().zip(FACE_UVS).enumerate() {
+                        // Direction du coin (±1 par axe), projetée sur le
+                        // plan de la face : les deux offsets tangents vers
+                        // les cellules qui bordent ce coin.
+                        let r = [
+                            corner[0] as i32 * 2 - 1,
+                            corner[1] as i32 * 2 - 1,
+                            corner[2] as i32 * 2 - 1,
+                        ];
+                        let mut t1 = [0i32; 3];
+                        let mut t2 = [0i32; 3];
+                        let mut tangents = (0..3).filter(|&a| n[a] == 0);
+                        let (a1, a2) = (tangents.next().unwrap(), tangents.next().unwrap());
+                        t1[a1] = r[a1];
+                        t2[a2] = r[a2];
+
+                        let s1 = [f[0] + t1[0], f[1] + t1[1], f[2] + t1[2]];
+                        let s2 = [f[0] + t2[0], f[1] + t2[1], f[2] + t2[2]];
+                        let c = [
+                            f[0] + t1[0] + t2[0],
+                            f[1] + t1[1] + t2[1],
+                            f[2] + t1[2] + t2[2],
+                        ];
+
+                        // Occlusion ambiante façon voxel : 2 côtés bouchés
+                        // = coin totalement occlus, sinon on compte.
+                        let (o1, o2, oc) = (
+                            light.solid(s1[0], s1[1], s1[2]),
+                            light.solid(s2[0], s2[1], s2[2]),
+                            light.solid(c[0], c[1], c[2]),
+                        );
+                        let ao = if o1 && o2 {
+                            0
+                        } else {
+                            3 - (o1 as u8 + o2 as u8 + oc as u8)
+                        };
+                        corner_ao[ci] = ao;
+
+                        // Lumière lissée : moyenne des 4 cellules d'air qui
+                        // touchent ce coin (c'est ce qui donne les dégradés).
+                        let (mut sky_sum, mut emit_sum, mut count) = (0u32, 0u32, 0u32);
+                        for cell in [f, s1, s2, c] {
+                            if light.known(cell[0], cell[1], cell[2])
+                                && !light.solid(cell[0], cell[1], cell[2])
+                            {
+                                sky_sum += light.sky(cell[0], cell[1], cell[2]) as u32;
+                                emit_sum += light.emit(cell[0], cell[1], cell[2]) as u32;
+                                count += 1;
+                            }
+                        }
+                        let count = count.max(1) as f32;
+                        let ao_factor = AO_CURVE[ao as usize];
+                        let sky = sky_sum as f32 / count / light::MAX_LIGHT as f32 * ao_factor;
+                        let emit = emit_sum as f32 / count / light::MAX_LIGHT as f32 * ao_factor;
+
                         let u_local = uv[0].clamp(inset, 1.0 - inset);
                         let v_local = uv[1].clamp(inset, 1.0 - inset);
                         vertices.push(Vertex {
@@ -205,16 +285,20 @@ pub fn build_mesh(
                             ],
                             uv: [(tile + u_local) * tile_width, v_local],
                             normal: *normal,
+                            light: [sky, emit],
                         });
                     }
-                    indices.extend_from_slice(&[
-                        base,
-                        base + 1,
-                        base + 2,
-                        base,
-                        base + 2,
-                        base + 3,
-                    ]);
+
+                    // Le quad est coupé selon la diagonale qui suit le
+                    // dégradé d'AO, sinon les coins sombres "bavent" le long
+                    // d'une seule diagonale (anisotropie).
+                    let quad: [u32; 6] =
+                        if corner_ao[0] + corner_ao[2] > corner_ao[1] + corner_ao[3] {
+                            [0, 1, 2, 0, 2, 3]
+                        } else {
+                            [1, 2, 3, 1, 3, 0]
+                        };
+                    indices.extend(quad.iter().map(|i| base + i));
                 }
             }
         }
