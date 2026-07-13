@@ -1,0 +1,19 @@
+[package]
+name = "artcraft"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+winit = "0.30"
+wgpu = "24"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.29"
+
+# Les dépendances graphiques sont très lentes en debug non optimisé.
+[profile.dev.package."*"]
+opt-level = 2
+
+# Le bruit de Perlin par bloc est trop lent en opt-level 0.
+[profile.dev]
+opt-level = 1

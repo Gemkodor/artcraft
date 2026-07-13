@@ -1,0 +1,36 @@
+# Artcraft
+
+Un Minecraft-like écrit en Rust, à partir de zéro, avec [wgpu](https://wgpu.rs) pour le rendu et [winit](https://github.com/rust-windowing/winit) pour la fenêtre.
+
+## Lancer
+
+```
+cargo run
+```
+
+Contrôles : clic gauche pour capturer la souris, Échap pour la libérer.
+Déplacement : ZQSD (position physique WASD), Espace pour monter, Maj gauche pour descendre.
+Souris capturée : clic gauche pour casser le bloc visé, clic droit pour en poser un.
+
+## Structure
+
+- `src/main.rs` — boucle d'événements winit, gestion clavier/souris
+- `src/state.rs` — initialisation wgpu, pipelines de rendu (terrain + viseur), casser/poser
+- `src/world.rs` — chargement/déchargement des chunks, raycast DDA, modification de blocs
+- `src/chunk.rs` — blocs (herbe/terre/pierre), génération du terrain et des grottes, meshing avec face culling
+- `src/noise.rs` — bruit de Perlin 2D/3D + fBm, écrit à la main
+- `src/mesh.rs` — format de sommet partagé
+- `src/camera.rs` — caméra FPS (yaw/pitch) et son contrôleur
+- `src/texture.rs` — texture de profondeur + texture atlas procédural
+- `src/shader.wgsl` — vertex/fragment shader (caméra + éclairage directionnel)
+- `src/crosshair.wgsl` — shader du viseur (dessin direct en NDC)
+
+## Feuille de route
+
+- [x] 1. Fenêtre + cube texturé + caméra libre
+- [x] 2. Un chunk 16×16×256 → un seul mesh, avec face culling
+- [x] 3. Plusieurs chunks + texture atlas
+- [x] 4. Génération procédurale (bruit de Perlin/Simplex, grottes)
+- [x] 5. Casser/poser des blocs (raycast + re-meshing)
+- [ ] 6. Physique du joueur (AABB, gravité, saut)
+- [ ] 7. Éclairage propagé, sauvegarde, greedy meshing, threading, multijoueur
