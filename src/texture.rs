@@ -19,7 +19,7 @@ pub fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> w
 }
 
 /// Nombre de tuiles dans l'atlas, côte à côte horizontalement.
-pub const ATLAS_TILES: u32 = 23;
+pub const ATLAS_TILES: u32 = 34;
 
 /// Résolution "logique" des tuiles procédurales, dessinées en code.
 const TILE: u32 = 16;
@@ -125,7 +125,19 @@ fn atlas_pixel(tile: u32, x: u32, y: u32) -> [u8; 3] {
                 18 => [45, 45, 45],    // bloc de charbon
                 19 => [190, 190, 195], // bloc d'acier
                 20 => [230, 195, 80],  // bloc d'or
-                _ => [150, 220, 225],  // bloc de diamant / défaut
+                21 => [150, 220, 225], // bloc de diamant
+                22 => [140, 105, 70],  // bibliothèque
+                23 => [225, 185, 130], // sable du désert
+                24 => [175, 130, 95],  // pierre du désert
+                25 => [200, 205, 215], // côté herbe enneigée
+                26 => [110, 85, 45],   // litière de jungle
+                27 => [115, 88, 55],   // côté litière
+                28 => [95, 70, 45],    // écorce de pin
+                29 => [40, 85, 60],    // aiguilles de pin
+                30 => [90, 75, 40],    // écorce de jungle
+                31 => [45, 105, 30],   // feuilles de jungle
+                32 => [55, 130, 65],   // cactus (côté)
+                _ => [70, 145, 80],    // cactus (dessus) / défaut
             };
             shade(base, v / 2)
         }
@@ -230,6 +242,34 @@ fn asset_tile(tile: u32) -> Option<Vec<u8>> {
         20 => file("default_gold_block.png")?,
         21 => file("default_diamond_block.png")?,
         22 => file("default_bookshelf.png")?,
+        23 => file("default_desert_sand.png")?,
+        24 => file("default_desert_stone.png")?,
+        25 => {
+            // Côté de l'herbe enneigée : bord de neige composé sur la terre.
+            let mut dirt = file("default_dirt.png")?;
+            blend_over(&mut dirt, &file("default_snow_side.png")?);
+            dirt
+        }
+        26 => file("default_rainforest_litter.png")?,
+        27 => {
+            let mut dirt = file("default_dirt.png")?;
+            blend_over(&mut dirt, &file("default_rainforest_litter_side.png")?);
+            dirt
+        }
+        28 => file("default_pine_tree.png")?,
+        29 => {
+            let mut needles = file("default_pine_needles.png")?;
+            flatten_alpha(&mut needles, [18, 40, 28]);
+            needles
+        }
+        30 => file("default_jungletree.png")?,
+        31 => {
+            let mut leaves = file("default_jungleleaves.png")?;
+            flatten_alpha(&mut leaves, [16, 40, 12]);
+            leaves
+        }
+        32 => file("default_cactus_side.png")?,
+        33 => file("default_cactus_top.png")?,
         _ => return None,
     };
     Some(img.into_raw())

@@ -28,7 +28,8 @@ retombe automatiquement sur sa version procédurale.
 - `src/player.rs` — physique du joueur : hitbox AABB, gravité, saut, collisions, mode vol
 - `src/world.rs` — cycle de vie des chunks, raycast DDA, modification de blocs
 - `src/worker.rs` — pool de threads : génération et meshing hors du thread principal
-- `src/chunk.rs` — blocs, génération du terrain, des grottes et des arbres, meshing avec face culling
+- `src/biome.rs` — climat par colonne (température/humidité) : blocs de surface et végétation
+- `src/chunk.rs` — blocs, génération du terrain, des grottes et de la végétation, meshing avec face culling
 - `src/light.rs` — lumière propagée (ciel + émission) et données d'occlusion ambiante
 - `src/sky.rs` — cycle jour/nuit : soleil, intensité, couleur du ciel/brouillard
 - `src/noise.rs` — bruit de Perlin 2D/3D + fBm, écrit à la main
@@ -54,7 +55,7 @@ retombe automatiquement sur sa version procédurale.
 - [x] 7c. Cycle jour/nuit, brouillard atmosphérique, arbres procéduraux
 - [x] 7d. Textures depuis assets/ (pack Minetest, CC BY-SA) avec bascule T
 - [x] 7e. Inventaire (E) : 22 blocs, hotbar personnalisable + soleil et lune texturés
-- [ ] 8. Biomes (désert, taïga, jungle) + variété d'arbres
+- [x] 8. Biomes (plaine, désert + cactus, taïga + pins, jungle) par bruits température/humidité
 - [ ] 9. Minerais dans la pierre (veines par bruit 3D)
 - [ ] 10. Transparence : verre, feuilles ajourées, eau
 - [ ] 11. Sauvegarde du monde sur disque, greedy meshing, multijoueur…

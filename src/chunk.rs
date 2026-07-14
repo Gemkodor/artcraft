@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::biome::{self, Biome};
 use crate::light;
 use crate::mesh::Vertex;
 use crate::noise::Noise;
@@ -34,6 +35,17 @@ pub enum Block {
     GoldBlock,
     DiamondBlock,
     Bookshelf,
+    DesertSand,
+    DesertStone,
+    /// Herbe sous la neige (surface de la taïga).
+    SnowyGrass,
+    /// Litière de feuilles mortes (surface de la jungle).
+    JungleLitter,
+    Cactus,
+    PineWood,
+    PineNeedles,
+    JungleWood,
+    JungleLeaves,
 }
 
 impl Block {
@@ -62,6 +74,20 @@ impl Block {
             Block::Bookshelf => match face {
                 2 | 3 => 5,
                 _ => 22,
+            },
+            Block::SnowyGrass => match face {
+                2 => 14, // neige dessus
+                3 => 2,  // terre dessous
+                _ => 25, // côtés : terre + bord de neige
+            },
+            Block::JungleLitter => match face {
+                2 => 26,
+                3 => 2,
+                _ => 27,
+            },
+            Block::Cactus => match face {
+                2 | 3 => 33,
+                _ => 32,
             },
             _ => self.icon_tile(),
         }
@@ -94,6 +120,15 @@ impl Block {
             Block::GoldBlock => 20,
             Block::DiamondBlock => 21,
             Block::Bookshelf => 22,
+            Block::DesertSand => 23,
+            Block::DesertStone => 24,
+            Block::SnowyGrass => 25,
+            Block::JungleLitter => 26,
+            Block::PineWood => 28,
+            Block::PineNeedles => 29,
+            Block::JungleWood => 30,
+            Block::JungleLeaves => 31,
+            Block::Cactus => 32,
         }
     }
 
@@ -164,9 +199,10 @@ fn column_hash(wx: i32, wz: i32, salt: u32) -> u32 {
     h ^ (h >> 16)
 }
 
-/// Un arbre pousse-t-il sur cette colonne ? Environ 1 colonne sur 60.
-fn has_tree(wx: i32, wz: i32) -> bool {
-    column_hash(wx, wz, 7) % 61 == 0
+/// Une colonne porte-t-elle de la végétation ? 1 chance sur `density`,
+/// déterministe (indépendante du chunk qui pose la question).
+fn has_vegetation(wx: i32, wz: i32, density: u32) -> bool {
+    column_hash(wx, wz, 7) % density == 0
 }
 
 impl Chunk {
@@ -180,17 +216,18 @@ impl Chunk {
             for z in 0..CHUNK_SIZE {
                 let wx = base_x + x as i32;
                 let wz = base_z + z as i32;
+                let biome = biome::biome_at(noise, wx, wz);
                 let height = terrain_height(noise, wx, wz);
                 for y in 0..=height {
                     if y > 0 && is_cave(noise, wx, y as i32, wz) {
                         continue;
                     }
                     blocks[index(x, y, z)] = if y == height {
-                        Block::Grass
+                        biome.surface_block()
                     } else if y + 3 >= height {
-                        Block::Dirt
+                        biome.subsurface_block()
                     } else {
-                        Block::Stone
+                        biome.deep_block()
                     };
                 }
             }
@@ -201,81 +238,37 @@ impl Chunk {
         chunk
     }
 
-    /// Plante les arbres du chunk. On parcourt aussi une marge de 2 colonnes
-    /// autour : un arbre voisin peut faire déborder son feuillage ici, et
-    /// chaque chunk doit produire le même arbre indépendamment (déterminisme).
+    /// Plante la végétation du chunk (arbres, cactus, selon le biome).
+    /// On parcourt aussi une marge de colonnes autour : un arbre voisin peut
+    /// faire déborder son feuillage ici, et chaque chunk doit produire le
+    /// même arbre indépendamment (déterminisme).
     fn plant_trees(&mut self, noise: &Noise, base_x: i32, base_z: i32) {
-        const MARGIN: i32 = 2;
+        // Rayon de feuillage maximal (canopée de la jungle).
+        const MARGIN: i32 = 3;
         let size = CHUNK_SIZE as i32;
-
-        // N'écrit que si la cible tombe dans ce chunk. `only_air` protège le
-        // tronc et le terrain d'être écrasés par le feuillage d'un voisin.
-        fn set(
-            blocks: &mut [Block],
-            base: (i32, i32),
-            wx: i32,
-            wy: i32,
-            wz: i32,
-            b: Block,
-            only_air: bool,
-        ) {
-            let (lx, lz) = (wx - base.0, wz - base.1);
-            let size = CHUNK_SIZE as i32;
-            if lx < 0 || lx >= size || lz < 0 || lz >= size || wy < 0 || wy >= CHUNK_HEIGHT as i32 {
-                return;
-            }
-            let i = index(lx as usize, wy as usize, lz as usize);
-            if !only_air || blocks[i] == Block::Air {
-                blocks[i] = b;
-            }
-        }
-        let base = (base_x, base_z);
 
         for wx in (base_x - MARGIN)..(base_x + size + MARGIN) {
             for wz in (base_z - MARGIN)..(base_z + size + MARGIN) {
-                if !has_tree(wx, wz) {
+                let biome = biome::biome_at(noise, wx, wz);
+                if !has_vegetation(wx, wz, biome.vegetation_density()) {
                     continue;
                 }
                 let surface = terrain_height(noise, wx, wz) as i32;
-                // Pas d'arbre au bord d'une grotte affleurante.
+                // Pas de végétation au bord d'une grotte affleurante.
                 if is_cave(noise, wx, surface, wz) {
                     continue;
                 }
-                let trunk_h = 4 + (column_hash(wx, wz, 13) % 3) as i32;
-                let base_y = surface + 1;
-
-                // Feuillage : deux couronnes larges puis un chapeau étroit.
-                for dy in (trunk_h - 2)..=(trunk_h + 1) {
-                    let radius: i32 = if dy < trunk_h { 2 } else { 1 };
-                    for dx in -radius..=radius {
-                        for dz in -radius..=radius {
-                            // Coins tronqués pour arrondir la silhouette.
-                            if dx.abs() == radius && dz.abs() == radius {
-                                continue;
-                            }
-                            set(
-                                &mut self.blocks,
-                                base,
-                                wx + dx,
-                                base_y + dy,
-                                wz + dz,
-                                Block::Leaves,
-                                true,
-                            );
-                        }
-                    }
-                }
-                // Tronc par-dessus le feuillage.
-                for dy in 0..trunk_h {
-                    set(
-                        &mut self.blocks,
-                        base,
-                        wx,
-                        base_y + dy,
-                        wz,
-                        Block::Wood,
-                        false,
-                    );
+                let roll = column_hash(wx, wz, 13);
+                let mut planter = Planter {
+                    blocks: &mut self.blocks,
+                    base: (base_x, base_z),
+                    origin: (wx, surface + 1, wz),
+                };
+                match biome {
+                    Biome::Plains => planter.oak(4 + (roll % 3) as i32),
+                    Biome::Taiga => planter.pine(6 + (roll % 3) as i32),
+                    Biome::Jungle => planter.jungle_tree(7 + (roll % 4) as i32),
+                    Biome::Desert => planter.cactus(2 + (roll % 2) as i32),
                 }
             }
         }
@@ -287,6 +280,92 @@ impl Chunk {
 
     pub fn set_local(&mut self, x: usize, y: usize, z: usize, block: Block) {
         self.blocks[index(x, y, z)] = block;
+    }
+}
+
+/// Assistant d'écriture de végétation : place des blocs en coordonnées
+/// relatives au pied de la plante, en n'écrivant que dans le chunk en cours
+/// de génération (les débordements sont réécrits par les chunks voisins,
+/// qui recalculent le même arbre).
+struct Planter<'a> {
+    blocks: &'a mut Vec<Block>,
+    base: (i32, i32),
+    /// Pied de la plante (premier bloc au-dessus du sol), en coordonnées monde.
+    origin: (i32, i32, i32),
+}
+
+impl Planter<'_> {
+    /// `only_air` protège le terrain et les troncs d'être écrasés par du
+    /// feuillage.
+    fn set(&mut self, dx: i32, dy: i32, dz: i32, block: Block, only_air: bool) {
+        let (wx, wy, wz) = (self.origin.0 + dx, self.origin.1 + dy, self.origin.2 + dz);
+        let (lx, lz) = (wx - self.base.0, wz - self.base.1);
+        let size = CHUNK_SIZE as i32;
+        if lx < 0 || lx >= size || lz < 0 || lz >= size || wy < 0 || wy >= CHUNK_HEIGHT as i32 {
+            return;
+        }
+        let i = index(lx as usize, wy as usize, lz as usize);
+        if !only_air || self.blocks[i] == Block::Air {
+            self.blocks[i] = block;
+        }
+    }
+
+    /// Couronne carrée de feuillage à la hauteur `dy`, coins tronqués pour
+    /// arrondir la silhouette.
+    fn canopy_layer(&mut self, dy: i32, radius: i32, leaves: Block) {
+        for dx in -radius..=radius {
+            for dz in -radius..=radius {
+                if radius > 0 && dx.abs() == radius && dz.abs() == radius {
+                    continue;
+                }
+                self.set(dx, dy, dz, leaves, true);
+            }
+        }
+    }
+
+    fn trunk(&mut self, height: i32, wood: Block) {
+        for dy in 0..height {
+            self.set(0, dy, 0, wood, false);
+        }
+    }
+
+    /// Chêne : couronne ronde autour du sommet.
+    fn oak(&mut self, trunk_h: i32) {
+        for dy in (trunk_h - 2)..=(trunk_h + 1) {
+            self.canopy_layer(dy, if dy < trunk_h { 2 } else { 1 }, Block::Leaves);
+        }
+        self.trunk(trunk_h, Block::Wood);
+    }
+
+    /// Pin : silhouette conique en jupes alternées, pointe au sommet.
+    fn pine(&mut self, trunk_h: i32) {
+        for dy in 3..=trunk_h {
+            let from_top = trunk_h - dy;
+            let radius = if from_top <= 1 || from_top % 2 == 1 {
+                1
+            } else {
+                2
+            };
+            self.canopy_layer(dy, radius, Block::PineNeedles);
+        }
+        self.set(0, trunk_h + 1, 0, Block::PineNeedles, true);
+        self.trunk(trunk_h, Block::PineWood);
+    }
+
+    /// Arbre de jungle : grand tronc, large canopée haute.
+    fn jungle_tree(&mut self, trunk_h: i32) {
+        for dy in (trunk_h - 1)..=(trunk_h + 1) {
+            let radius = if dy <= trunk_h { 3 } else { 1 };
+            self.canopy_layer(dy, radius, Block::JungleLeaves);
+        }
+        self.trunk(trunk_h, Block::JungleWood);
+    }
+
+    /// Cactus : simple colonne.
+    fn cactus(&mut self, height: i32) {
+        for dy in 0..height {
+            self.set(0, dy, 0, Block::Cactus, false);
+        }
     }
 }
 

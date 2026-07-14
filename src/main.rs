@@ -1,3 +1,4 @@
+mod biome;
 mod camera;
 mod chunk;
 mod light;

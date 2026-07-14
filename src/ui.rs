@@ -19,7 +19,7 @@ pub const HOTBAR: [Block; 8] = [
 ];
 
 /// Tous les blocs plaçables, dans l'ordre d'affichage de l'inventaire.
-pub const ALL_BLOCKS: [Block; 22] = [
+pub const ALL_BLOCKS: [Block; 31] = [
     Block::Grass,
     Block::Dirt,
     Block::Stone,
@@ -42,6 +42,15 @@ pub const ALL_BLOCKS: [Block; 22] = [
     Block::GoldBlock,
     Block::DiamondBlock,
     Block::Bookshelf,
+    Block::DesertSand,
+    Block::DesertStone,
+    Block::SnowyGrass,
+    Block::JungleLitter,
+    Block::Cactus,
+    Block::PineWood,
+    Block::PineNeedles,
+    Block::JungleWood,
+    Block::JungleLeaves,
 ];
 
 /// Grille de l'inventaire : dimensions et position, partagées entre le
