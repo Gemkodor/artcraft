@@ -24,8 +24,9 @@ pub const ATLAS_TILES: u32 = 9;
 /// Résolution "logique" des tuiles procédurales, dessinées en code.
 const TILE: u32 = 16;
 /// Résolution réelle des tuiles dans l'atlas GPU : celle des PNG du dossier
-/// assets/. Les tuiles procédurales sont agrandies ×4 sans changer d'aspect.
-const TILE_PX: u32 = 64;
+/// assets/ (pack Minetest en 128×128). Les tuiles procédurales sont
+/// agrandies ×8 sans changer d'aspect.
+const TILE_PX: u32 = 128;
 
 fn hash(x: u32, y: u32, seed: u32) -> u32 {
     let mut h = x
@@ -124,10 +125,38 @@ fn procedural_tile(tile: u32) -> Vec<u8> {
     out
 }
 
-/// Charge la tuile depuis le dossier assets/, si un fichier lui correspond.
-/// `None` (fichier absent, illisible, ou tuile sans équivalent) fait
-/// retomber l'appelant sur la version procédurale : le jeu marche toujours,
-/// même avec un dossier assets incomplet.
+/// Fond alpha-blendé par-dessus une image de base (pour les overlays du
+/// pack, comme la frange d'herbe sur le côté du bloc de terre).
+fn blend_over(base: &mut image::RgbaImage, overlay: &image::RgbaImage) {
+    for (x, y, o) in overlay.enumerate_pixels() {
+        let a = o[3] as u32;
+        if a > 0 {
+            let d = base.get_pixel_mut(x, y);
+            for c in 0..3 {
+                d[c] = ((o[c] as u32 * a + d[c] as u32 * (255 - a)) / 255) as u8;
+            }
+        }
+    }
+}
+
+/// Remplace la transparence par une couleur de fond : notre rendu de blocs
+/// est opaque, un pixel transparent afficherait des données indéfinies.
+fn flatten_alpha(img: &mut image::RgbaImage, background: [u8; 3]) {
+    for pixel in img.pixels_mut() {
+        let a = pixel[3] as u32;
+        if a < 255 {
+            for c in 0..3 {
+                pixel[c] = ((pixel[c] as u32 * a + background[c] as u32 * (255 - a)) / 255) as u8;
+            }
+            pixel[3] = 255;
+        }
+    }
+}
+
+/// Charge la tuile depuis le dossier assets/ (pack Minetest), si un fichier
+/// lui correspond. `None` (fichier absent ou illisible) fait retomber
+/// l'appelant sur la version procédurale : le jeu marche toujours, même
+/// avec un dossier assets incomplet.
 fn asset_tile(tile: u32) -> Option<Vec<u8>> {
     let file = |name: &str| -> Option<image::RgbaImage> {
         let path = std::path::Path::new("assets").join(name);
@@ -140,33 +169,28 @@ fn asset_tile(tile: u32) -> Option<Vec<u8>> {
     };
 
     let img = match tile {
-        0 => file("floor_ground_grass.png")?,
+        0 => file("default_grass.png")?,
         1 => {
-            // Côté du bloc d'herbe : terre + frange d'herbe alpha-blendée
-            // (le bord haut de l'overlay du pack).
-            let mut dirt = file("floor_ground_dirt.png")?;
-            let overlay = file("floor_ground_grass_overlay.png")?;
-            for y in 0..20 {
-                for x in 0..TILE_PX {
-                    let o = overlay.get_pixel(x, y);
-                    let a = o[3] as u32;
-                    if a > 0 {
-                        let d = dirt.get_pixel_mut(x, y);
-                        for c in 0..3 {
-                            d[c] = ((o[c] as u32 * a + d[c] as u32 * (255 - a)) / 255) as u8;
-                        }
-                    }
-                }
-            }
+            // Côté du bloc d'herbe : le pack fournit la frange d'herbe en
+            // overlay transparent, à composer sur la terre.
+            let mut dirt = file("default_dirt.png")?;
+            blend_over(&mut dirt, &file("default_grass_side.png")?);
             dirt
         }
-        2 => file("floor_ground_dirt.png")?,
-        3 => file("floor_stone.png")?,
-        4 => file("floor_ground_sand.png")?,
-        5 => file("floor_wood_planks.png")?,
-        6 => file("window_square_pane_lit.png")?,
-        7 => file("timber_square_planks.png")?,
-        // Feuilles : pas d'équivalent dans le pack, version procédurale.
+        2 => file("default_dirt.png")?,
+        3 => file("default_stone.png")?,
+        4 => file("default_sand.png")?,
+        5 => file("default_wood.png")?,
+        6 => file("default_meselamp.png")?,
+        7 => file("default_tree.png")?,
+        8 => {
+            // Les feuilles du pack sont ajourées (transparence) ; on les
+            // aplatit sur un vert sombre en attendant de vrais blocs
+            // transparents dans le moteur.
+            let mut leaves = file("default_leaves.png")?;
+            flatten_alpha(&mut leaves, [24, 48, 16]);
+            leaves
+        }
         _ => return None,
     };
     Some(img.into_raw())
