@@ -12,6 +12,8 @@ Contrôles : clic gauche pour capturer la souris, Échap pour la libérer.
 Déplacement : ZQSD (position physique WASD), Espace pour sauter.
 Souris capturée : clic gauche pour casser le bloc visé, clic droit pour poser
 le bloc sélectionné (touches 1-8 ou molette pour choisir).
+E ouvre l'inventaire : cliquer sur un bloc l'assigne au slot sélectionné de la
+hotbar (22 blocs disponibles).
 F bascule entre survie (gravité + collisions) et vol (Espace/Maj pour monter/descendre).
 Le bloc lumineux (touche 6) éclaire les grottes ; un cycle jour/nuit de 8 minutes
 fait tourner le soleil.
@@ -50,5 +52,9 @@ retombe automatiquement sur sa version procédurale.
 - [x] 7a. Génération/meshing dans un pool de threads (plus de micro-saccades)
 - [x] 7b. Éclairage propagé (ciel + blocs lumineux) + occlusion ambiante
 - [x] 7c. Cycle jour/nuit, brouillard atmosphérique, arbres procéduraux
-- [ ] 8. Sauvegarde du monde sur disque
-- [ ] 9. Greedy meshing, biomes, eau, multijoueur…
+- [x] 7d. Textures depuis assets/ (pack Minetest, CC BY-SA) avec bascule T
+- [x] 7e. Inventaire (E) : 22 blocs, hotbar personnalisable + soleil et lune texturés
+- [ ] 8. Biomes (désert, taïga, jungle) + variété d'arbres
+- [ ] 9. Minerais dans la pierre (veines par bruit 3D)
+- [ ] 10. Transparence : verre, feuilles ajourées, eau
+- [ ] 11. Sauvegarde du monde sur disque, greedy meshing, multijoueur…

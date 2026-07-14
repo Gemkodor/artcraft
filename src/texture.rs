@@ -19,7 +19,7 @@ pub fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> w
 }
 
 /// Nombre de tuiles dans l'atlas, côte à côte horizontalement.
-pub const ATLAS_TILES: u32 = 9;
+pub const ATLAS_TILES: u32 = 23;
 
 /// Résolution "logique" des tuiles procédurales, dessinées en code.
 const TILE: u32 = 16;
@@ -100,13 +100,34 @@ fn atlas_pixel(tile: u32, x: u32, y: u32) -> [u8; 3] {
                 shade(BARK, v / 3)
             }
         }
-        _ => {
+        8 => {
             // Feuilles : trous sombres épars dans le feuillage.
             if hash(x, y, 33) % 6 == 0 {
                 shade(LEAVES, -55 + v / 3)
             } else {
                 shade(LEAVES, v)
             }
+        }
+        // Tuiles 9+ : les blocs de construction ajoutés avec le pack de
+        // textures. La version procédurale reste volontairement simple
+        // (couleur de base + grain), ce sont des tuiles de secours.
+        _ => {
+            let base: [i32; 3] = match tile {
+                9 => [105, 105, 105],  // pavés
+                10 => [95, 115, 90],   // pavés moussus
+                11 => [150, 90, 75],   // briques
+                12 => [118, 118, 122], // pierre taillée
+                13 => [205, 190, 145], // grès
+                14 => [235, 240, 245], // neige
+                15 => [165, 200, 235], // glace
+                16 => [28, 24, 40],    // obsidienne
+                17 => [120, 112, 105], // gravier
+                18 => [45, 45, 45],    // bloc de charbon
+                19 => [190, 190, 195], // bloc d'acier
+                20 => [230, 195, 80],  // bloc d'or
+                _ => [150, 220, 225],  // bloc de diamant / défaut
+            };
+            shade(base, v / 2)
         }
     }
 }
@@ -191,9 +212,107 @@ fn asset_tile(tile: u32) -> Option<Vec<u8>> {
             flatten_alpha(&mut leaves, [24, 48, 16]);
             leaves
         }
+        9 => file("default_cobble.png")?,
+        10 => file("default_mossycobble.png")?,
+        11 => file("default_brick.png")?,
+        12 => file("default_stone_brick.png")?,
+        13 => file("default_sandstone.png")?,
+        14 => file("default_snow.png")?,
+        15 => {
+            let mut ice = file("default_ice.png")?;
+            flatten_alpha(&mut ice, [140, 175, 215]);
+            ice
+        }
+        16 => file("default_obsidian.png")?,
+        17 => file("default_gravel.png")?,
+        18 => file("default_coal_block.png")?,
+        19 => file("default_steel_block.png")?,
+        20 => file("default_gold_block.png")?,
+        21 => file("default_diamond_block.png")?,
+        22 => file("default_bookshelf.png")?,
         _ => return None,
     };
     Some(img.into_raw())
+}
+
+/// Petite texture ciel : le soleil et la lune côte à côte (2 tuiles).
+/// Depuis les PNG du pack si présents, sinon des disques dessinés en code.
+pub fn create_sky_texture(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+    const SKY_TILE: u32 = 128;
+
+    let load = |name: &str| -> Option<image::RgbaImage> {
+        let img = image::open(std::path::Path::new("assets").join(name))
+            .ok()?
+            .to_rgba8();
+        Some(if img.dimensions() == (SKY_TILE, SKY_TILE) {
+            img
+        } else {
+            image::imageops::resize(
+                &img,
+                SKY_TILE,
+                SKY_TILE,
+                image::imageops::FilterType::Nearest,
+            )
+        })
+    };
+    // Disque uni sur fond transparent, si les PNG manquent.
+    let disc = |color: [u8; 3]| -> image::RgbaImage {
+        image::RgbaImage::from_fn(SKY_TILE, SKY_TILE, |x, y| {
+            let (dx, dy) = (
+                x as f32 - SKY_TILE as f32 / 2.0,
+                y as f32 - SKY_TILE as f32 / 2.0,
+            );
+            let inside = (dx * dx + dy * dy).sqrt() < SKY_TILE as f32 * 0.42;
+            let a = if inside { 255 } else { 0 };
+            image::Rgba([color[0], color[1], color[2], a])
+        })
+    };
+
+    let sun = load("sun.png").unwrap_or_else(|| disc([255, 240, 180]));
+    let moon = load("moon.png").unwrap_or_else(|| disc([210, 220, 235]));
+
+    let width = SKY_TILE * 2;
+    let mut pixels = vec![0u8; (width * SKY_TILE * 4) as usize];
+    let row = (SKY_TILE * 4) as usize;
+    for (tile, img) in [(0usize, &sun), (1, &moon)] {
+        let data = img.as_raw();
+        for y in 0..SKY_TILE as usize {
+            let dst = (y * width as usize + tile * SKY_TILE as usize) * 4;
+            pixels[dst..dst + row].copy_from_slice(&data[y * row..(y + 1) * row]);
+        }
+    }
+
+    let size = wgpu::Extent3d {
+        width,
+        height: SKY_TILE,
+        depth_or_array_layers: 1,
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sky_texture"),
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &pixels,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(SKY_TILE),
+        },
+        size,
+    );
+    texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
 /// Construit l'atlas et l'envoie au GPU. `use_assets` choisit la source :

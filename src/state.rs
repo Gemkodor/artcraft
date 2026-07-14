@@ -34,6 +34,52 @@ struct Globals {
 const FOG_END: f32 = (world::RENDER_DISTANCE * 16 - 12) as f32;
 const FOG_START: f32 = FOG_END - 45.0;
 
+/// Sommet des quads soleil/lune : position monde + UV dans la texture ciel.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct SkyVertex {
+    position: [f32; 3],
+    uv: [f32; 2],
+}
+
+/// Les 12 sommets (2 quads) du soleil et de la lune, placés loin de la
+/// caméra dans leur direction respective (la lune est à l'opposé du soleil).
+fn sky_vertices(camera_pos: Vec3, sun_dir: Vec3) -> [SkyVertex; 12] {
+    const DIST: f32 = 420.0;
+    const SIZE: f32 = 42.0;
+
+    let mut verts = [SkyVertex {
+        position: [0.0; 3],
+        uv: [0.0; 2],
+    }; 12];
+
+    for (i, (dir, tile)) in [(sun_dir, 0.0f32), (-sun_dir, 1.0)].into_iter().enumerate() {
+        // Base orthonormée du quad, face à la caméra. Près du zénith,
+        // l'axe Y ne peut plus servir de référence "haut".
+        let up_ref = if dir.y.abs() > 0.98 { Vec3::Z } else { Vec3::Y };
+        let right = dir.cross(up_ref).normalize() * SIZE;
+        let up = right.cross(dir).normalize() * SIZE;
+        let center = camera_pos + dir * DIST;
+
+        let (u0, u1) = (tile * 0.5 + 0.002, (tile + 1.0) * 0.5 - 0.002);
+        let corners = [
+            (center - right - up, [u0, 1.0]),
+            (center + right - up, [u1, 1.0]),
+            (center + right + up, [u1, 0.0]),
+            (center - right - up, [u0, 1.0]),
+            (center + right + up, [u1, 0.0]),
+            (center - right + up, [u0, 0.0]),
+        ];
+        for (j, (pos, uv)) in corners.into_iter().enumerate() {
+            verts[i * 6 + j] = SkyVertex {
+                position: pos.to_array(),
+                uv,
+            };
+        }
+    }
+    verts
+}
+
 pub struct State {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -44,10 +90,21 @@ pub struct State {
     crosshair_buffer: wgpu::Buffer,
     ui_pipeline: wgpu::RenderPipeline,
     ui_buffer: wgpu::Buffer,
+    sky_pipeline: wgpu::RenderPipeline,
+    sky_buffer: wgpu::Buffer,
+    sky_bind_group: wgpu::BindGroup,
+    inventory_buffer: wgpu::Buffer,
     world: World,
     player: Player,
     sky: Sky,
     selected: usize,
+    /// Barre de sélection modifiable : l'inventaire assigne un bloc au slot
+    /// sélectionné.
+    hotbar: [Block; 8],
+    inventory_open: bool,
+    /// Dernière position connue de la souris (repère fenêtre, origine en
+    /// haut à gauche), pour les clics dans l'inventaire.
+    cursor_pos: (f32, f32),
     depth_view: wgpu::TextureView,
     texture_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
@@ -326,9 +383,84 @@ impl State {
             multiview: None,
             cache: None,
         });
+        let hotbar = HOTBAR;
         let ui_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ui_buffer"),
-            contents: bytemuck::cast_slice(&ui::hotbar_vertices(config.width, config.height, 0)),
+            contents: bytemuck::cast_slice(&ui::hotbar_vertices(
+                config.width,
+                config.height,
+                0,
+                &hotbar,
+            )),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+        let inventory_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("inventory_buffer"),
+            contents: bytemuck::cast_slice(&ui::inventory_vertices(config.width, config.height)),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        });
+
+        // Soleil et lune : leur propre petite texture et un pipeline dédié,
+        // dessiné avant le terrain sans écrire la profondeur.
+        let sky_view = texture::create_sky_texture(&device, &queue);
+        let sky_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("sky_bind_group"),
+            layout: &texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&sky_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+        });
+        let sky_shader = device.create_shader_module(wgpu::include_wgsl!("skybox.wgsl"));
+        let sky_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("sky_layout"),
+            bind_group_layouts: &[&texture_layout, &camera_layout],
+            push_constant_ranges: &[],
+        });
+        let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sky_pipeline"),
+            layout: Some(&sky_layout),
+            vertex: wgpu::VertexState {
+                module: &sky_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<SkyVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sky_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::DEPTH_FORMAT,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            multiview: None,
+            cache: None,
+        });
+        let sky_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("sky_buffer"),
+            contents: bytemuck::cast_slice(&sky_vertices(Vec3::ZERO, Vec3::Y)),
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -342,10 +474,17 @@ impl State {
             crosshair_buffer,
             ui_pipeline,
             ui_buffer,
+            sky_pipeline,
+            sky_buffer,
+            sky_bind_group,
+            inventory_buffer,
             world: World::new(),
             player,
             sky,
             selected: 0,
+            hotbar,
+            inventory_open: false,
+            cursor_pos: (0.0, 0.0),
             depth_view,
             texture_layout,
             sampler,
@@ -393,21 +532,53 @@ impl State {
             let target = hit.block + hit.normal;
             // Jamais dans la hitbox du joueur.
             if self.world.block_at(target) == Block::Air && !self.player.intersects_block(target) {
-                self.world.set_block(target, HOTBAR[self.selected]);
+                self.world.set_block(target, self.hotbar[self.selected]);
             }
         }
     }
 
-    /// Touches 1-5.
+    pub fn inventory_open(&self) -> bool {
+        self.inventory_open
+    }
+
+    /// Touche E : ouvre/ferme l'inventaire. Renvoie le nouvel état pour que
+    /// main.rs libère ou capture la souris en conséquence.
+    pub fn toggle_inventory(&mut self) -> bool {
+        self.inventory_open = !self.inventory_open;
+        self.inventory_open
+    }
+
+    pub fn close_inventory(&mut self) {
+        self.inventory_open = false;
+    }
+
+    pub fn set_cursor(&mut self, x: f32, y: f32) {
+        self.cursor_pos = (x, y);
+    }
+
+    /// Clic dans l'inventaire : assigne le bloc cliqué au slot sélectionné
+    /// de la hotbar et ferme l'inventaire. Renvoie true si un bloc a été
+    /// choisi (main.rs recapture alors la souris).
+    pub fn inventory_click(&mut self) -> bool {
+        let block = ui::inventory_block_at(self.config.width, self.config.height, self.cursor_pos);
+        if let Some(block) = block {
+            self.hotbar[self.selected] = block;
+            self.inventory_open = false;
+            return true;
+        }
+        false
+    }
+
+    /// Touches 1-8.
     pub fn select_slot(&mut self, slot: usize) {
-        if slot < HOTBAR.len() {
+        if slot < self.hotbar.len() {
             self.selected = slot;
         }
     }
 
     /// Molette : +1 vers le bas, -1 vers le haut.
     pub fn scroll_slot(&mut self, dir: i32) {
-        let n = HOTBAR.len() as i32;
+        let n = self.hotbar.len() as i32;
         self.selected = ((self.selected as i32 + dir).rem_euclid(n)) as usize;
     }
 
@@ -459,14 +630,30 @@ impl State {
         self.queue
             .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&globals));
         self.queue.write_buffer(
+            &self.sky_buffer,
+            0,
+            bytemuck::cast_slice(&sky_vertices(pos, sun)),
+        );
+        self.queue.write_buffer(
             &self.ui_buffer,
             0,
             bytemuck::cast_slice(&ui::hotbar_vertices(
                 self.config.width,
                 self.config.height,
                 self.selected,
+                &self.hotbar,
             )),
         );
+        if self.inventory_open {
+            self.queue.write_buffer(
+                &self.inventory_buffer,
+                0,
+                bytemuck::cast_slice(&ui::inventory_vertices(
+                    self.config.width,
+                    self.config.height,
+                )),
+            );
+        }
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
@@ -512,6 +699,14 @@ impl State {
                 ..Default::default()
             });
 
+            // Soleil et lune d'abord : sans écriture de profondeur, le
+            // terrain dessiné ensuite les recouvre.
+            pass.set_pipeline(&self.sky_pipeline);
+            pass.set_bind_group(0, &self.sky_bind_group, &[]);
+            pass.set_bind_group(1, &self.camera_bind_group, &[]);
+            pass.set_vertex_buffer(0, self.sky_buffer.slice(..));
+            pass.draw(0..12, 0..1);
+
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.texture_bind_group, &[]);
             pass.set_bind_group(1, &self.camera_bind_group, &[]);
@@ -521,14 +716,21 @@ impl State {
                 pass.draw_indexed(0..mesh.num_indices, 0, 0..1);
             }
 
-            pass.set_pipeline(&self.crosshair_pipeline);
-            pass.set_vertex_buffer(0, self.crosshair_buffer.slice(..));
-            pass.draw(0..12, 0..1);
+            if !self.inventory_open {
+                pass.set_pipeline(&self.crosshair_pipeline);
+                pass.set_vertex_buffer(0, self.crosshair_buffer.slice(..));
+                pass.draw(0..12, 0..1);
+            }
 
             pass.set_pipeline(&self.ui_pipeline);
             pass.set_bind_group(0, &self.texture_bind_group, &[]);
             pass.set_vertex_buffer(0, self.ui_buffer.slice(..));
             pass.draw(0..ui::HOTBAR_VERTEX_COUNT, 0..1);
+
+            if self.inventory_open {
+                pass.set_vertex_buffer(0, self.inventory_buffer.slice(..));
+                pass.draw(0..ui::INVENTORY_VERTEX_COUNT, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));

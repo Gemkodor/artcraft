@@ -61,7 +61,7 @@ impl ApplicationHandler for App {
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes().with_title(
-                    "Artcraft — clic : casser · droit : poser · 1-8 : bloc · F : vol · T : textures · Échap : libérer",
+                    "Artcraft — E : inventaire · 1-8 : hotbar · clic : casser · droit : poser · F : vol · T : textures",
                 ))
                 .expect("échec de création de la fenêtre"),
         );
@@ -80,7 +80,16 @@ impl ApplicationHandler for App {
                 if let PhysicalKey::Code(code) = event.physical_key {
                     let pressed = event.state == ElementState::Pressed;
                     match code {
-                        KeyCode::Escape if pressed => self.set_mouse_grab(false),
+                        KeyCode::Escape if pressed => {
+                            state.close_inventory();
+                            self.set_mouse_grab(false);
+                        }
+                        KeyCode::KeyE if pressed => {
+                            // L'inventaire a besoin du curseur ; le refermer
+                            // rend la souris au contrôle de la caméra.
+                            let open = state.toggle_inventory();
+                            self.set_mouse_grab(!open);
+                        }
                         KeyCode::KeyF if pressed => state.toggle_fly(),
                         KeyCode::KeyT if pressed => state.toggle_textures(),
                         KeyCode::Digit1 if pressed => state.select_slot(0),
@@ -110,11 +119,19 @@ impl ApplicationHandler for App {
                     }
                 }
             }
+            WindowEvent::CursorMoved { position, .. } => {
+                state.set_cursor(position.x as f32, position.y as f32);
+            }
             WindowEvent::MouseInput {
                 state: ElementState::Pressed,
                 button,
                 ..
             } => match button {
+                MouseButton::Left if state.inventory_open() => {
+                    if state.inventory_click() {
+                        self.set_mouse_grab(true);
+                    }
+                }
                 MouseButton::Left if !self.mouse_grabbed => self.set_mouse_grab(true),
                 MouseButton::Left => state.break_block(),
                 MouseButton::Right if self.mouse_grabbed => state.place_block(),

@@ -1,0 +1,16 @@
+Textures du dossier assets/
+===========================
+
+Ces textures proviennent de minetest_game (le jeu par défaut de Minetest,
+aujourd'hui Luanti) : https://github.com/luanti-org/minetest_game
+
+Licence : Creative Commons Attribution-ShareAlike 3.0 (CC BY-SA 3.0)
+https://creativecommons.org/licenses/by-sa/3.0/
+
+Auteurs : les contributeurs de minetest_game (voir les fichiers license.txt
+des mods default, doors, farming, wool, etc. dans le dépôt d'origine pour le
+détail par fichier).
+
+Conditions : attribution (ce fichier) et partage des adaptations éventuelles
+de ces textures sous la même licence. Le code source d'Artcraft n'est pas
+concerné par cette licence.

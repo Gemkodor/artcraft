@@ -20,6 +20,20 @@ pub enum Block {
     Glow,
     Wood,
     Leaves,
+    Cobble,
+    MossyCobble,
+    Brick,
+    StoneBrick,
+    Sandstone,
+    Snow,
+    Ice,
+    Obsidian,
+    Gravel,
+    CoalBlock,
+    SteelBlock,
+    GoldBlock,
+    DiamondBlock,
+    Bookshelf,
 }
 
 impl Block {
@@ -43,13 +57,21 @@ impl Block {
             Block::Glow => 6,
             Block::Wood => 7,
             Block::Leaves => 8,
-            Block::Air => 0,
+            // La bibliothèque a des planches dessus/dessous, des livres
+            // sur les côtés.
+            Block::Bookshelf => match face {
+                2 | 3 => 5,
+                _ => 22,
+            },
+            _ => self.icon_tile(),
         }
     }
 
-    /// Tuile utilisée comme icône dans la barre de sélection.
+    /// Tuile utilisée comme icône dans la barre de sélection (et par défaut
+    /// pour toutes les faces des blocs "uniformes").
     pub fn icon_tile(self) -> u32 {
         match self {
+            Block::Air => 0,
             Block::Grass => 1,
             Block::Dirt => 2,
             Block::Stone => 3,
@@ -58,7 +80,20 @@ impl Block {
             Block::Glow => 6,
             Block::Wood => 7,
             Block::Leaves => 8,
-            Block::Air => 0,
+            Block::Cobble => 9,
+            Block::MossyCobble => 10,
+            Block::Brick => 11,
+            Block::StoneBrick => 12,
+            Block::Sandstone => 13,
+            Block::Snow => 14,
+            Block::Ice => 15,
+            Block::Obsidian => 16,
+            Block::Gravel => 17,
+            Block::CoalBlock => 18,
+            Block::SteelBlock => 19,
+            Block::GoldBlock => 20,
+            Block::DiamondBlock => 21,
+            Block::Bookshelf => 22,
         }
     }
 
