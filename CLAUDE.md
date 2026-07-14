@@ -16,8 +16,8 @@ cargo clippy       # lints — corriger les avertissements introduits
 
 - **From scratch** : pas de crate toute faite pour ce qui est le cœur du sujet
   (bruit, meshing, physique, éclairage). Les seules dépendances acceptées sont
-  l'infrastructure : `wgpu`, `winit`, `glam`, `bytemuck`, `pollster`.
-  Demander avant d'ajouter une dépendance.
+  l'infrastructure : `wgpu`, `winit`, `glam`, `bytemuck`, `pollster`, `image`
+  (décodage PNG uniquement). Demander avant d'ajouter une dépendance.
 - **Chaque jalon reste jouable** : ne jamais laisser `main` dans un état où
   `cargo run` ne donne pas un jeu fonctionnel.
 - La feuille de route vit dans le `README` — la tenir à jour.

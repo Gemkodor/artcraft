@@ -9,6 +9,9 @@ wgpu = "24"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 glam = "0.29"
+# Décodage des PNG du dossier assets/ (fonctionnalités réduites au strict
+# nécessaire pour garder la compilation rapide).
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Les dépendances graphiques sont très lentes en debug non optimisé.
 [profile.dev.package."*"]

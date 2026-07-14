@@ -61,7 +61,7 @@ impl ApplicationHandler for App {
         let window = Arc::new(
             event_loop
                 .create_window(Window::default_attributes().with_title(
-                    "Artcraft — clic : souris/casser · droit : poser · 1-5/molette : bloc · F : vol · Échap : libérer",
+                    "Artcraft — clic : casser · droit : poser · 1-8 : bloc · F : vol · T : textures · Échap : libérer",
                 ))
                 .expect("échec de création de la fenêtre"),
         );
@@ -82,6 +82,7 @@ impl ApplicationHandler for App {
                     match code {
                         KeyCode::Escape if pressed => self.set_mouse_grab(false),
                         KeyCode::KeyF if pressed => state.toggle_fly(),
+                        KeyCode::KeyT if pressed => state.toggle_textures(),
                         KeyCode::Digit1 if pressed => state.select_slot(0),
                         KeyCode::Digit2 if pressed => state.select_slot(1),
                         KeyCode::Digit3 if pressed => state.select_slot(2),

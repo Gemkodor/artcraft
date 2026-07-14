@@ -49,6 +49,9 @@ pub struct State {
     sky: Sky,
     selected: usize,
     depth_view: wgpu::TextureView,
+    texture_layout: wgpu::BindGroupLayout,
+    sampler: wgpu::Sampler,
+    use_assets: bool,
     texture_bind_group: wgpu::BindGroup,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
@@ -100,7 +103,10 @@ impl State {
         let depth_view = texture::create_depth_texture(&device, config.width, config.height);
 
         // Texture + sampler (filtrage "nearest" pour le look pixelisé).
-        let texture_view = texture::create_atlas_texture(&device, &queue);
+        // Les PNG du dossier assets/ sont utilisés s'il existe, sinon les
+        // textures procédurales ; la touche T bascule entre les deux.
+        let use_assets = std::path::Path::new("assets").is_dir();
+        let texture_view = texture::create_atlas_texture(&device, &queue, use_assets);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
@@ -341,6 +347,9 @@ impl State {
             sky,
             selected: 0,
             depth_view,
+            texture_layout,
+            sampler,
+            use_assets,
             texture_bind_group,
             camera_buffer,
             camera_bind_group,
@@ -404,6 +413,28 @@ impl State {
 
     pub fn toggle_fly(&mut self) {
         self.player.toggle_fly();
+    }
+
+    /// Touche T : bascule entre les textures du dossier assets/ et les
+    /// textures procédurales. L'atlas est reconstruit et le bind group
+    /// remplacé ; les meshes et UVs ne changent pas.
+    pub fn toggle_textures(&mut self) {
+        self.use_assets = !self.use_assets;
+        let view = texture::create_atlas_texture(&self.device, &self.queue, self.use_assets);
+        self.texture_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("texture_bind_group"),
+            layout: &self.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
     }
 
     pub fn update(&mut self, dt: f32) {

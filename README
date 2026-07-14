@@ -15,6 +15,9 @@ le bloc sélectionné (touches 1-8 ou molette pour choisir).
 F bascule entre survie (gravité + collisions) et vol (Espace/Maj pour monter/descendre).
 Le bloc lumineux (touche 6) éclaire les grottes ; un cycle jour/nuit de 8 minutes
 fait tourner le soleil.
+T bascule entre les textures du dossier `assets/` (des PNG, si présents) et les
+textures procédurales générées en code. Toute tuile sans fichier correspondant
+retombe automatiquement sur sa version procédurale.
 
 ## Structure
 
@@ -29,7 +32,7 @@ fait tourner le soleil.
 - `src/noise.rs` — bruit de Perlin 2D/3D + fBm, écrit à la main
 - `src/mesh.rs` — format de sommet partagé
 - `src/camera.rs` — caméra (yaw/pitch) et état des touches
-- `src/texture.rs` — texture de profondeur + texture atlas procédural
+- `src/texture.rs` — texture de profondeur + atlas (PNG du dossier assets/ ou tuiles procédurales)
 - `src/ui.rs` — géométrie du viseur et de la hotbar
 - `src/shader.wgsl` — shader du terrain (lumière par sommet, jour/nuit, brouillard)
 - `src/crosshair.wgsl` — shader du viseur (dessin direct en NDC)
