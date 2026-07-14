@@ -42,20 +42,6 @@ impl Camera {
     }
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct CameraUniform {
-    pub view_proj: [[f32; 4]; 4],
-}
-
-impl CameraUniform {
-    pub fn from_camera(camera: &Camera) -> Self {
-        Self {
-            view_proj: camera.view_proj().to_cols_array_2d(),
-        }
-    }
-}
-
 /// État des touches de déplacement + sensibilité souris. Les touches sont des
 /// positions physiques (WASD sur QWERTY correspond automatiquement à ZQSD sur
 /// AZERTY). Le mouvement lui-même est appliqué par la physique du joueur.

@@ -1,19 +1,38 @@
 use std::sync::Arc;
 
+use bytemuck::Zeroable;
 use glam::Vec3;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use crate::camera::{Camera, CameraController, CameraUniform};
+use crate::camera::{Camera, CameraController};
 use crate::chunk::Block;
 use crate::mesh::Vertex;
 use crate::player::{self, Player};
+use crate::sky::Sky;
 use crate::texture;
 use crate::ui::{self, HOTBAR, UiVertex};
-use crate::world::World;
+use crate::world::{self, World};
 
 /// Portée de la main du joueur, en blocs.
 const REACH: f32 = 6.0;
+
+/// Uniforms partagés par la scène : caméra, soleil, ciel et brouillard.
+/// La disposition doit correspondre au struct `Globals` de shader.wgsl.
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct Globals {
+    view_proj: [[f32; 4]; 4],
+    camera_pos: [f32; 4],
+    sun: [f32; 4],
+    sky_color: [f32; 4],
+    fog: [f32; 4],
+}
+
+/// Le brouillard se termine juste avant la limite des chunks chargés, pour
+/// masquer leur apparition.
+const FOG_END: f32 = (world::RENDER_DISTANCE * 16 - 12) as f32;
+const FOG_START: f32 = FOG_END - 45.0;
 
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -27,6 +46,7 @@ pub struct State {
     ui_buffer: wgpu::Buffer,
     world: World,
     player: Player,
+    sky: Sky,
     selected: usize,
     depth_view: wgpu::TextureView,
     texture_bind_group: wgpu::BindGroup,
@@ -134,17 +154,19 @@ impl State {
         );
         let controller = CameraController::new(0.002);
 
-        let camera_uniform = CameraUniform::from_camera(&camera);
+        let sky = Sky::new();
+        let globals = Globals::zeroed();
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("camera_buffer"),
-            contents: bytemuck::bytes_of(&camera_uniform),
+            label: Some("globals_buffer"),
+            contents: bytemuck::bytes_of(&globals),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
         let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera_layout"),
+            label: Some("globals_layout"),
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                // Le fragment shader lit le soleil et le brouillard.
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -316,6 +338,7 @@ impl State {
             ui_buffer,
             world: World::new(),
             player,
+            sky,
             selected: 0,
             depth_view,
             texture_bind_group,
@@ -388,9 +411,22 @@ impl State {
             .update(&self.world, &self.controller, self.camera.yaw, dt);
         self.camera.position = self.player.pos + Vec3::Y * player::EYE_HEIGHT;
         self.world.update(&self.device, self.camera.position);
-        let uniform = CameraUniform::from_camera(&self.camera);
+        self.sky.advance(dt);
+
+        let (pos, sun, color) = (
+            self.camera.position,
+            self.sky.sun_dir(),
+            self.sky.sky_color(),
+        );
+        let globals = Globals {
+            view_proj: self.camera.view_proj().to_cols_array_2d(),
+            camera_pos: [pos.x, pos.y, pos.z, 0.0],
+            sun: [sun.x, sun.y, sun.z, self.sky.sun_intensity()],
+            sky_color: [color.x, color.y, color.z, 1.0],
+            fog: [FOG_START, FOG_END, 0.0, 0.0],
+        };
         self.queue
-            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&globals));
         self.queue.write_buffer(
             &self.ui_buffer,
             0,
@@ -419,12 +455,17 @@ impl State {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // Bleu ciel.
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.45,
-                            g: 0.7,
-                            b: 1.0,
-                            a: 1.0,
+                        // La couleur du ciel suit le cycle jour/nuit ; le
+                        // brouillard du shader utilise la même valeur pour
+                        // que l'horizon soit invisible.
+                        load: wgpu::LoadOp::Clear({
+                            let c = self.sky.sky_color();
+                            wgpu::Color {
+                                r: c.x as f64,
+                                g: c.y as f64,
+                                b: c.z as f64,
+                                a: 1.0,
+                            }
                         }),
                         store: wgpu::StoreOp::Store,
                     },

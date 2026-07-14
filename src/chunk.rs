@@ -18,6 +18,8 @@ pub enum Block {
     Plank,
     /// Bloc lumineux : source de lumière propagée (niveau 15).
     Glow,
+    Wood,
+    Leaves,
 }
 
 impl Block {
@@ -39,6 +41,8 @@ impl Block {
             Block::Sand => 4,
             Block::Plank => 5,
             Block::Glow => 6,
+            Block::Wood => 7,
+            Block::Leaves => 8,
             Block::Air => 0,
         }
     }
@@ -52,6 +56,8 @@ impl Block {
             Block::Sand => 4,
             Block::Plank => 5,
             Block::Glow => 6,
+            Block::Wood => 7,
+            Block::Leaves => 8,
             Block::Air => 0,
         }
     }
@@ -112,15 +118,33 @@ fn is_cave(noise: &Noise, wx: i32, wy: i32, wz: i32) -> bool {
     n > 0.38
 }
 
+/// Hash entier d'une colonne monde, pour décider déterministiquement de la
+/// présence d'un arbre (indépendant du chunk qui fait le calcul).
+fn column_hash(wx: i32, wz: i32, salt: u32) -> u32 {
+    let mut h = (wx as u32)
+        .wrapping_mul(374_761_393)
+        .wrapping_add((wz as u32).wrapping_mul(668_265_263))
+        .wrapping_add(salt.wrapping_mul(2_246_822_519));
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    h ^ (h >> 16)
+}
+
+/// Un arbre pousse-t-il sur cette colonne ? Environ 1 colonne sur 60.
+fn has_tree(wx: i32, wz: i32) -> bool {
+    column_hash(wx, wz, 7) % 61 == 0
+}
+
 impl Chunk {
     /// Génère la colonne de terrain du chunk (cx, cz), en coordonnées chunk.
     /// La couche y=0 n'est jamais creusée (bedrock de fortune).
     pub fn generate(noise: &Noise, cx: i32, cz: i32) -> Self {
         let mut blocks = vec![Block::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_HEIGHT];
+        let (base_x, base_z) = (cx * CHUNK_SIZE as i32, cz * CHUNK_SIZE as i32);
+
         for x in 0..CHUNK_SIZE {
             for z in 0..CHUNK_SIZE {
-                let wx = cx * CHUNK_SIZE as i32 + x as i32;
-                let wz = cz * CHUNK_SIZE as i32 + z as i32;
+                let wx = base_x + x as i32;
+                let wz = base_z + z as i32;
                 let height = terrain_height(noise, wx, wz);
                 for y in 0..=height {
                     if y > 0 && is_cave(noise, wx, y as i32, wz) {
@@ -136,7 +160,90 @@ impl Chunk {
                 }
             }
         }
-        Self { blocks }
+
+        let mut chunk = Self { blocks };
+        chunk.plant_trees(noise, base_x, base_z);
+        chunk
+    }
+
+    /// Plante les arbres du chunk. On parcourt aussi une marge de 2 colonnes
+    /// autour : un arbre voisin peut faire déborder son feuillage ici, et
+    /// chaque chunk doit produire le même arbre indépendamment (déterminisme).
+    fn plant_trees(&mut self, noise: &Noise, base_x: i32, base_z: i32) {
+        const MARGIN: i32 = 2;
+        let size = CHUNK_SIZE as i32;
+
+        // N'écrit que si la cible tombe dans ce chunk. `only_air` protège le
+        // tronc et le terrain d'être écrasés par le feuillage d'un voisin.
+        fn set(
+            blocks: &mut [Block],
+            base: (i32, i32),
+            wx: i32,
+            wy: i32,
+            wz: i32,
+            b: Block,
+            only_air: bool,
+        ) {
+            let (lx, lz) = (wx - base.0, wz - base.1);
+            let size = CHUNK_SIZE as i32;
+            if lx < 0 || lx >= size || lz < 0 || lz >= size || wy < 0 || wy >= CHUNK_HEIGHT as i32 {
+                return;
+            }
+            let i = index(lx as usize, wy as usize, lz as usize);
+            if !only_air || blocks[i] == Block::Air {
+                blocks[i] = b;
+            }
+        }
+        let base = (base_x, base_z);
+
+        for wx in (base_x - MARGIN)..(base_x + size + MARGIN) {
+            for wz in (base_z - MARGIN)..(base_z + size + MARGIN) {
+                if !has_tree(wx, wz) {
+                    continue;
+                }
+                let surface = terrain_height(noise, wx, wz) as i32;
+                // Pas d'arbre au bord d'une grotte affleurante.
+                if is_cave(noise, wx, surface, wz) {
+                    continue;
+                }
+                let trunk_h = 4 + (column_hash(wx, wz, 13) % 3) as i32;
+                let base_y = surface + 1;
+
+                // Feuillage : deux couronnes larges puis un chapeau étroit.
+                for dy in (trunk_h - 2)..=(trunk_h + 1) {
+                    let radius: i32 = if dy < trunk_h { 2 } else { 1 };
+                    for dx in -radius..=radius {
+                        for dz in -radius..=radius {
+                            // Coins tronqués pour arrondir la silhouette.
+                            if dx.abs() == radius && dz.abs() == radius {
+                                continue;
+                            }
+                            set(
+                                &mut self.blocks,
+                                base,
+                                wx + dx,
+                                base_y + dy,
+                                wz + dz,
+                                Block::Leaves,
+                                true,
+                            );
+                        }
+                    }
+                }
+                // Tronc par-dessus le feuillage.
+                for dy in 0..trunk_h {
+                    set(
+                        &mut self.blocks,
+                        base,
+                        wx,
+                        base_y + dy,
+                        wz,
+                        Block::Wood,
+                        false,
+                    );
+                }
+            }
+        }
     }
 
     pub fn block_local(&self, x: usize, y: usize, z: usize) -> Block {

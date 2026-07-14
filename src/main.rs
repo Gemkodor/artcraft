@@ -4,6 +4,7 @@ mod light;
 mod mesh;
 mod noise;
 mod player;
+mod sky;
 mod state;
 mod texture;
 mod ui;
@@ -87,6 +88,8 @@ impl ApplicationHandler for App {
                         KeyCode::Digit4 if pressed => state.select_slot(3),
                         KeyCode::Digit5 if pressed => state.select_slot(4),
                         KeyCode::Digit6 if pressed => state.select_slot(5),
+                        KeyCode::Digit7 if pressed => state.select_slot(6),
+                        KeyCode::Digit8 if pressed => state.select_slot(7),
                         _ => {
                             state.controller.process_key(code, pressed);
                         }

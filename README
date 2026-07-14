@@ -11,21 +11,27 @@ cargo run
 Contrôles : clic gauche pour capturer la souris, Échap pour la libérer.
 Déplacement : ZQSD (position physique WASD), Espace pour sauter.
 Souris capturée : clic gauche pour casser le bloc visé, clic droit pour poser
-le bloc sélectionné (touches 1-5 ou molette pour choisir).
+le bloc sélectionné (touches 1-8 ou molette pour choisir).
 F bascule entre survie (gravité + collisions) et vol (Espace/Maj pour monter/descendre).
+Le bloc lumineux (touche 6) éclaire les grottes ; un cycle jour/nuit de 8 minutes
+fait tourner le soleil.
 
 ## Structure
 
 - `src/main.rs` — boucle d'événements winit, gestion clavier/souris
 - `src/state.rs` — initialisation wgpu, pipelines de rendu (terrain, viseur, hotbar), casser/poser
 - `src/player.rs` — physique du joueur : hitbox AABB, gravité, saut, collisions, mode vol
-- `src/world.rs` — chargement/déchargement des chunks, raycast DDA, modification de blocs
-- `src/chunk.rs` — blocs (herbe/terre/pierre/sable/planches), génération du terrain et des grottes, meshing avec face culling
+- `src/world.rs` — cycle de vie des chunks, raycast DDA, modification de blocs
+- `src/worker.rs` — pool de threads : génération et meshing hors du thread principal
+- `src/chunk.rs` — blocs, génération du terrain, des grottes et des arbres, meshing avec face culling
+- `src/light.rs` — lumière propagée (ciel + émission) et données d'occlusion ambiante
+- `src/sky.rs` — cycle jour/nuit : soleil, intensité, couleur du ciel/brouillard
 - `src/noise.rs` — bruit de Perlin 2D/3D + fBm, écrit à la main
 - `src/mesh.rs` — format de sommet partagé
 - `src/camera.rs` — caméra (yaw/pitch) et état des touches
 - `src/texture.rs` — texture de profondeur + texture atlas procédural
-- `src/shader.wgsl` — vertex/fragment shader (caméra + éclairage directionnel)
+- `src/ui.rs` — géométrie du viseur et de la hotbar
+- `src/shader.wgsl` — shader du terrain (lumière par sommet, jour/nuit, brouillard)
 - `src/crosshair.wgsl` — shader du viseur (dessin direct en NDC)
 - `src/ui.wgsl` — shader de la hotbar (quads colorés ou texturés depuis l'atlas)
 
@@ -37,5 +43,9 @@ F bascule entre survie (gravité + collisions) et vol (Espace/Maj pour monter/de
 - [x] 4. Génération procédurale (bruit de Perlin/Simplex, grottes)
 - [x] 5. Casser/poser des blocs (raycast + re-meshing)
 - [x] 6. Physique du joueur (AABB, gravité, saut) + mode survie par défaut, F pour voler
-- [x] 6b. Hotbar : 5 blocs plaçables, sélection touches 1-5 / molette
-- [ ] 7. Éclairage propagé, sauvegarde, greedy meshing, threading, multijoueur
+- [x] 6b. Hotbar : 8 blocs plaçables, sélection touches 1-8 / molette
+- [x] 7a. Génération/meshing dans un pool de threads (plus de micro-saccades)
+- [x] 7b. Éclairage propagé (ciel + blocs lumineux) + occlusion ambiante
+- [x] 7c. Cycle jour/nuit, brouillard atmosphérique, arbres procéduraux
+- [ ] 8. Sauvegarde du monde sur disque
+- [ ] 9. Greedy meshing, biomes, eau, multijoueur…

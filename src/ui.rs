@@ -6,13 +6,15 @@ use crate::chunk::Block;
 use crate::texture::ATLAS_TILES;
 
 /// Les blocs plaçables, dans l'ordre de la barre de sélection (touches 1-N).
-pub const HOTBAR: [Block; 6] = [
+pub const HOTBAR: [Block; 8] = [
     Block::Grass,
     Block::Dirt,
     Block::Stone,
     Block::Sand,
     Block::Plank,
     Block::Glow,
+    Block::Wood,
+    Block::Leaves,
 ];
 
 /// Sommet UI : position en NDC, UV dans l'atlas (négatif = couleur unie),
